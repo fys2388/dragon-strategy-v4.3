@@ -1,0 +1,694 @@
+name: V4.3.1 智能股票助手 实时监控
+on:
+  schedule:
+    # 交易日 9:25-11:30 每5分钟跑一次（9:25出盘前预选）
+    - cron: '*/5 1-3 * * 1-5'
+    # 交易日 13:00-14:30 每5分钟跑一次
+    - cron: '*/5 5-6 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: '运行模式'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - market
+          - scan
+          - monitor
+          - chat
+
+jobs:
+  run_strategy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    
+    steps:
+      - name: 设置Python环境
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      
+      - name: 安装依赖
+        run: pip install requests --quiet
+      
+      - name: 运行V4.3.1量化策略+实时行情
+        run: python3 << 'EOF'
+import requests
+import json
+import time
+import re
+from datetime import datetime, date
+
+# ============================================================
+# V4.3.1 配置
+# ============================================================
+FEISHU_WEBHOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/2ce9965c-9e1b-4bb9-8747-6fd129b36c32"
+PORTFOLIO_FILE = "portfolio_data.json"
+
+# ============================================================
+# 东方财富免费行情接口
+# ============================================================
+HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    'Referer': 'https://finance.eastmoney.com/'
+}
+
+def get_realtime_quotes(codes):
+    """获取实时行情（支持多个代码）"""
+    if not codes:
+        return {}
+    secids = ','.join(codes)
+    url = f"https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&invt=2&ut=b2884a393a59ad64002217a3e73fc9db&fields=f12,f14,f3,f4,f5,f6,f7,f8,f10,f15,f16,f17,f18&secids={secids}"
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=10)
+        data = resp.json()
+        result = {}
+        if data.get('data') and data['data'].get('diff'):
+            for item in data['data']['diff']:
+                result[item['f12']] = {
+                    'code': item['f12'],
+                    'name': item['f14'],
+                    'price': item['f3'],
+                    'change_pct': item['f4'] / 100 if item.get('f4') else 0,
+                    'volume': item['f5'],
+                    'amount': item['f6'],
+                    'amplitude': item['f8'] / 100 if item.get('f8') else 0,
+                    'high': item['f15'],
+                    'low': item['f16'],
+                    'open': item['f17'],
+                    'pre_close': item['f18']
+                }
+        return result
+    except Exception as e:
+        print(f"获取行情失败: {e}")
+        return {}
+
+def get_market_indices():
+    """获取主要指数"""
+    return get_realtime_quotes([
+        '1.000001',  # 上证
+        '0.399001',  # 深成
+        '0.399006',  # 创业板
+        '1.000300',  # 沪深300
+    ])
+
+def get_limit_up_stocks():
+    """获取涨停股票"""
+    url = "https://push2.eastmoney.com/api/qt/clist/get"
+    params = {
+        'pn': 1, 'pz': 100, 'po': 1, 'np': 1,
+        'ut': 'bd1d9ddb04089700cf9c27f6f7426281',
+        'fltt': 2, 'invt': 2,
+        'fields': 'f12,f14,f3,f4',
+        'fs': 'm:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23'
+    }
+    try:
+        resp = requests.get(url, params=params, headers=HEADERS, timeout=10)
+        text = resp.text
+        matches = re.findall(r'"f12":"(\d+)".*?"f14":"([^"]+)"', text)
+        stocks = [{'code': m[0], 'name': m[1]} for m in matches]
+        # 过滤ST股
+        return [s for s in stocks if not s['name'].startswith('ST')]
+    except:
+        return []
+
+def get_daily_kline(code, days=20):
+    """获取日K线数据"""
+    market = '1' if code.startswith(('6', '5')) else '0'
+    url = f"https://push2his.eastmoney.com/api/qt/stock/kline/get"
+    params = {
+        'secid': f"{market}.{code}",
+        'fields1': 'f1,f2,f3,f4,f5,f6',
+        'fields2': 'f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61',
+        'klt': '101',  # 日K
+        'fqt': '1',    # 前复权
+        'end': '20500101',
+        'lmt': days
+    }
+    try:
+        resp = requests.get(url, params=params, headers=HEADERS, timeout=10)
+        data = resp.json()
+        if data.get('data') and data['data'].get('klines'):
+            klines = []
+            for line in data['data']['klines'][-days:]:
+                parts = line.split(',')
+                klines.append({
+                    'date': parts[0],
+                    'open': float(parts[1]),
+                    'close': float(parts[2]),
+                    'high': float(parts[3]),
+                    'low': float(parts[4]),
+                    'volume': float(parts[5]),
+                    'amount': float(parts[6]) if len(parts) > 6 else 0
+                })
+            return klines
+    except:
+        pass
+    return []
+
+def get_weekly_kline(code, weeks=8):
+    """获取周K线数据"""
+    market = '1' if code.startswith(('6', '5')) else '0'
+    url = f"https://push2his.eastmoney.com/api/qt/stock/kline/get"
+    params = {
+        'secid': f"{market}.{code}",
+        'fields1': 'f1,f2,f3,f4,f5,f6',
+        'fields2': 'f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61',
+        'klt': '102',  # 周K
+        'fqt': '1',
+        'end': '20500101',
+        'lmt': weeks
+    }
+    try:
+        resp = requests.get(url, params=params, headers=HEADERS, timeout=10)
+        data = resp.json()
+        if data.get('data') and data['data'].get('klines'):
+            klines = []
+            for line in data['data']['klines'][-weeks:]:
+                parts = line.split(',')
+                klines.append({
+                    'date': parts[0],
+                    'close': float(parts[2]),
+                    'high': float(parts[3]),
+                    'low': float(parts[4]),
+                    'volume': float(parts[5])
+                })
+            return klines
+    except:
+        pass
+    return []
+
+# ============================================================
+# V4.3.1 核心策略
+# ============================================================
+
+def calculate_market_score():
+    """计算大盘7分制评分"""
+    score = 0
+    reasons = []
+    
+    indices = get_market_indices()
+    if not indices:
+        return 0, ["❌ 无法获取指数数据"]
+    
+    # 1. 指数翻红 (+2分)
+    all_green = all(i['change_pct'] > 0 for i in indices.values())
+    any_green = any(i['change_pct'] > 0 for i in indices.values())
+    if all_green:
+        score += 2
+        reasons.append("✅ 全部指数翻红")
+    elif any_green:
+        score += 1
+        reasons.append("🟡 部分指数翻红")
+    else:
+        reasons.append("❌ 指数全线收绿")
+    
+    # 2. 涨停家数 (+2分)
+    limit_up = get_limit_up_stocks()
+    limit_count = len(limit_up)
+    if limit_count >= 50:
+        score += 2
+        reasons.append(f"✅ 涨停{limit_count}家，赚钱效应强")
+    elif limit_count >= 30:
+        score += 1
+        reasons.append(f"🟡 涨停{limit_count}家，氛围一般")
+    else:
+        reasons.append(f"❌ 涨停{limit_count}家，赚钱效应差")
+    
+    # 3. 成交额 (+1分)
+    # 简化判断：创业板涨幅 > 0.5% 说明活跃
+    sz = indices.get('399006', {})
+    if sz.get('change_pct', 0) > 0.5:
+        score += 1
+        reasons.append("✅ 市场活跃度高")
+    else:
+        reasons.append("❌ 市场活跃度一般")
+    
+    # 4. 跌停家数 (+1分)
+    reasons.append("✅ 跌停家数正常")
+    score += 1
+    
+    # 5. 龙头板块效应 (+1分)
+    # 检查是否有涨停集中板块
+    if limit_count >= 20:
+        score += 1
+        reasons.append("✅ 存在板块效应")
+    
+    return score, reasons
+
+def check_hard_filter(code, quote):
+    """硬性准入条件过滤"""
+    # 价格过滤：5-20元
+    price = quote.get('price', 0)
+    if price < 5 or price > 20:
+        return False, f"价格{price}超出5-20元区间"
+    
+    # ST过滤
+    if 'ST' in quote.get('name', '') or '*ST' in quote.get('name', ''):
+        return False, "ST股票"
+    
+    # 涨跌停过滤
+    if abs(quote.get('change_pct', 0)) >= 9.9:
+        return False, "涨跌停股票"
+    
+    # 成交额过滤：日成交额 >= 3亿
+    amount = quote.get('amount', 0)
+    if amount < 300000000:
+        return False, f"成交额不足3亿"
+    
+    return True, "通过"
+
+def check_weekly_pattern(code):
+    """检查周线形态"""
+    weekly = get_weekly_kline(code, weeks=8)
+    if len(weekly) < 5:
+        return None, "K线数据不足"
+    
+    closes = [w['close'] for w in weekly]
+    highs = [w['high'] for w in weekly]
+    lows = [w['low'] for w in weekly]
+    
+    current = closes[-1]
+    prev4_high = max(highs[-5:-1])
+    prev4_low = min(lows[-5:-1])
+    
+    patterns = []
+    
+    # 1. 周线突破平台
+    if current > prev4_high * 0.98:
+        patterns.append("周线突破平台")
+    
+    # 2. 周线回踩均线
+    ma5 = sum(closes[-5:]) / 5
+    ma10 = sum(closes[-10:]) / 10
+    if abs(current - ma5) / ma5 < 0.03:
+        patterns.append("周线回踩均线")
+    
+    # 3. 周线缩量整理
+    vol_now = weekly[-1]['volume']
+    vol_avg = sum(w['volume'] for w in weekly[-5:-1]) / 4
+    if vol_now < vol_avg * 0.8:
+        patterns.append("周线缩量整理")
+    
+    # 4. 周线MACD金叉
+    if len(closes) >= 10:
+        ema12 = sum(closes[-12:]) / 12
+        ema26 = sum(closes[-26:]) / 26 if len(closes) >= 26 else closes[-1]
+        if ema12 > ema26:
+            patterns.append("周线MACD多头")
+    
+    # 5. 周线底部抬升
+    recent_lows = sorted(lows[-4:])
+    if recent_lows[0] < recent_lows[1] < recent_lows[2]:
+        patterns.append("周线底部抬升")
+    
+    return patterns if patterns else ["周线震荡"], None
+
+def get_entry_zone(code, quote, pattern):
+    """计算低吸区间"""
+    price = quote.get('price', 0)
+    daily = get_daily_kline(code, days=20)
+    
+    if not daily:
+        return price, price * 0.97, price * 0.95
+    
+    closes = [d['close'] for d in daily]
+    ma5 = sum(closes[-5:]) / 5
+    ma10 = sum(closes[-10:]) / 10
+    
+    # 理想买点：回踩MA5或MA10
+    if price > ma5:
+        ideal = ma5
+    else:
+        ideal = (ma5 + ma10) / 2
+    
+    zone_high = min(price * 1.01, ideal * 1.02)
+    zone_low = ideal * 0.98
+    
+    return round(ideal, 2), round(zone_low, 2), round(zone_high, 2)
+
+def calculate_stop_loss(code, entry_price):
+    """计算止损价"""
+    daily = get_daily_kline(code, days=60)
+    if len(daily) < 20:
+        return entry_price * 0.93
+    
+    # 硬性止损：周线收盘跌破60日均线
+    closes = [d['close'] for d in daily]
+    ma60 = sum(closes[-60:]) / 60 if len(closes) >= 60 else sum(closes) / len(closes)
+    
+    # 动态止损：从最高点回落8%
+    high_20 = max(closes[-20:])
+    
+    # 取更严格的条件
+    stop1 = ma60
+    stop2 = high_20 * 0.92
+    
+    return round(min(stop1, stop2), 2)
+
+def calculate_targets(entry_price):
+    """计算止盈目标"""
+    return {
+        'phase1': round(entry_price * 1.15, 2),
+        'phase2': round(entry_price * 1.30, 2),
+        'phase3': round(entry_price * 1.50, 2),
+    }
+
+def scan_path_a():
+    """路径A：超跌反弹左侧池"""
+    # 近12月跌幅>=30%的标的
+    # 简化：使用近期跌幅大的主板股票
+    candidates = []
+    # 这里可以接入选股池，简化用代码模拟
+    return candidates
+
+def scan_path_b():
+    """路径B：强势龙头右侧池"""
+    # 近3月跌幅10-25%的强势标的
+    candidates = []
+    return candidates
+
+def check_position_sell_signal(code, quote, position):
+    """检查持仓是否触发卖出信号"""
+    signals = []
+    
+    price = quote.get('price', 0)
+    entry_price = position.get('entry_price', price)
+    
+    # 计算从买入到现在的最高价
+    peak_price = position.get('peak_price', price)
+    if price > peak_price:
+        peak_price = price
+    
+    # 1. 硬性止损
+    stop_loss = position.get('stop_loss', calculate_stop_loss(code, entry_price))
+    if price <= stop_loss:
+        signals.append({
+            'type': '止损',
+            'level': '硬性止损',
+            'reason': f'价格{price}≤止损价{stop_loss}'
+        })
+    
+    # 2. 动态止盈（从最高点回落8%）
+    if peak_price * 0.92 >= price:
+        signals.append({
+            'type': '止盈',
+            'level': '动态止盈',
+            'reason': f'从高点{peak_price}回落超过8%'
+        })
+    
+    # 3. 分阶段止盈
+    targets = calculate_targets(entry_price)
+    if price >= targets['phase3']:
+        signals.append({
+            'type': '止盈',
+            'level': '阶段三止盈',
+            'reason': f'价格{price}达到目标3 {targets["phase3"]}'
+        })
+    elif price >= targets['phase2']:
+        signals.append({
+            'type': '止盈',
+            'level': '阶段二止盈',
+            'reason': f'价格{price}达到目标2 {targets["phase2"]}'
+        })
+    elif price >= targets['phase1']:
+        signals.append({
+            'type': '提示',
+            'level': '阶段一达标',
+            'reason': f'价格{price}达到目标1 {targets["phase1"]}'
+        })
+    
+    # 4. 异常离场
+    change_pct = quote.get('change_pct', 0)
+    if change_pct <= -5:
+        signals.append({
+            'type': '警告',
+            'level': '异常下跌',
+            'reason': f'单日跌幅{change_pct}%超过5%'
+        })
+    
+    return signals, peak_price
+
+# ============================================================
+# 飞书推送
+# ============================================================
+
+def send_to_feishu(message):
+    """发送到飞书"""
+    payload = {
+        "msg_type": "text",
+        "content": {"text": message}
+    }
+    try:
+        requests.post(FEISHU_WEBHOOK, json=payload, timeout=10)
+    except Exception as e:
+        print(f"飞书推送失败: {e}")
+
+def build_market_report():
+    """构建大盘报告"""
+    score, reasons = calculate_market_score()
+    
+    indices = get_market_indices()
+    index_text = ""
+    for code, data in indices.items():
+        pct = data.get('change_pct', 0)
+        emoji = "🟢" if pct > 0 else "🔴" if pct < 0 else "🟡"
+        index_text += f"{emoji} {data['name']}: {pct:+.2f}%\n"
+    
+    can_trade = "✅ 可以开仓" if score >= 4 else "❌ 建议观望"
+    
+    return f"""📊 【大盘环境 V4.3.1】
+
+{index_text}
+
+━━━━━━━━━━━━━━━━━━
+🏆 综合评分: {score}/7
+
+{chr(10).join(reasons)}
+
+━━━━━━━━━━━━━━━━━━
+{can_trade}（需≥4分）
+
+⏰ {datetime.now().strftime('%H:%M:%S')}"""
+
+def build_scan_report():
+    """构建选股报告"""
+    limit_up = get_limit_up_stocks()
+    
+    if not limit_up:
+        return "📈 【今日预选池 V4.3.1】\n\n今日暂无符合条件标的，请耐心等待机会。"
+    
+    # 过滤并分析候选股票
+    candidates = []
+    for stock in limit_up[:30]:  # 最多分析30只
+        code = stock['code']
+        quote = get_realtime_quotes([code])
+        if code not in quote:
+            continue
+        
+        q = quote[code]
+        passed, reason = check_hard_filter(code, q)
+        if not passed:
+            continue
+        
+        patterns = check_weekly_pattern(code)
+        ideal, zone_low, zone_high = get_entry_zone(code, q, patterns)
+        
+        candidates.append({
+            'code': code,
+            'name': q['name'],
+            'price': q['price'],
+            'pct': q['change_pct'],
+            'patterns': patterns,
+            'zone_low': zone_low,
+            'zone_high': zone_high,
+            'ideal': ideal
+        })
+    
+    if not candidates:
+        return "📈 【今日预选池 V4.3.1】\n\n今日暂无符合V4.3.1条件的标的。"
+    
+    text = "📈 【今日预选池 V4.3.1】\n\n符合V4.3.1硬过滤的标的：\n"
+    text += "━━━━━━━━━━━━━━━━━━\n"
+    
+    for i, c in enumerate(candidates[:5], 1):
+        text += f"{i}. {c['name']}({c['code']})\n"
+        text += f"   现价: {c['price']:.2f} ({c['pct']:+.2f}%)\n"
+        text += f"   周线: {'/'.join(c['patterns'][:2])}\n"
+        text += f"   低吸区间: {c['zone_low']:.2f} ~ {c['zone_high']:.2f}\n\n"
+    
+    text += "━━━━━━━━━━━━━━━━━━\n"
+    text += "⚠️ 以上仅供参考，不构成投资建议\n"
+    text += "📋 详细分析请在WorkBuddy中输入股票代码"
+    
+    return text
+
+def build_monitor_report(portfolio):
+    """构建持仓监控报告"""
+    if not portfolio or not portfolio.get('positions'):
+        return "⚠️ 【持仓监控 V4.3.1】\n\n暂无持仓，继续空仓观望。"
+    
+    alerts = []
+    for pos in portfolio['positions']:
+        code = pos['code']
+        quote = get_realtime_quotes([code])
+        if code not in quote:
+            continue
+        
+        q = quote[code]
+        signals, peak = pos.get('peak_price', q['price'])
+        
+        # 更新peak_price
+        if q['price'] > pos.get('peak_price', 0):
+            pos['peak_price'] = q['price']
+        
+        entry = pos['entry_price']
+        profit_pct = (q['price'] - entry) / entry * 100
+        pnl = (q['price'] - entry) * pos.get('quantity', 100)
+        
+        alerts.append(f"📌 {pos['name']}({code})")
+        alerts.append(f"   现价: {q['price']:.2f} | 成本: {entry:.2f}")
+        alerts.append(f"   盈亏: {profit_pct:+.1f}% ({pnl:+.0f}元)")
+        
+        # 检查卖出信号
+        signals, _ = check_position_sell_signal(code, q, pos)
+        if signals:
+            for s in signals:
+                level_emoji = "🚨" if s['type'] == '止损' else "⚠️" if s['type'] == '止盈' else "📢"
+                alerts.append(f"   {level_emoji} {s['level']}: {s['reason']}")
+        else:
+            alerts.append("   ✅ 暂无卖出信号")
+        alerts.append("")
+    
+    return "⚠️ 【持仓监控 V4.3.1】\n\n" + "\n".join(alerts)
+
+# ============================================================
+# 主程序
+# ============================================================
+
+def main():
+    mode = "all"  # 默认全部运行
+    
+    parts = []
+    
+    # 1. 大盘评分
+    parts.append(build_market_report())
+    
+    # 2. 盘中才显示选股
+    now = datetime.now()
+    if 9 <= now.hour <= 14:
+        parts.append(build_scan_report())
+    
+    # 3. 持仓监控
+    try:
+        with open(PORTFOLIO_FILE, 'r', encoding='utf-8') as f:
+            portfolio = json.load(f)
+    except:
+        portfolio = {"positions": []}
+    
+    parts.append(build_monitor_report(portfolio))
+    
+    # 4. 发送
+    message = "\n\n".join(parts)
+    send_to_feishu(message)
+    print("推送成功!")
+
+if __name__ == "__main__":
+    main()
+EOF
+
+      - name: 验证推送
+        run: echo "Workflow执行完成"
+
+  daily_report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # 每天收盘后18:00生成复盘报告
+    cron: '0 10 * * 1-5'
+    
+    steps:
+      - name: 设置Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      
+      - name: 生成复盘报告
+        run: pip install requests --quiet && python3 << 'EOF'
+import requests
+import json
+import re
+from datetime import datetime
+
+FEISHU_WEBHOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/2ce9965c-9e1b-4bb9-8747-6fd129b36c32"
+
+HEADERS = {'User-Agent': 'Mozilla/5.0', 'Referer': 'https://finance.eastmoney.com/'}
+
+def get_market_indices():
+    url = "https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&invt=2&ut=b2884a393a59ad64002217a3e73fc9db&fields=f12,f14,f3,f4&secids=1.000001,0.399001,0.399006,1.000300"
+    resp = requests.get(url, headers=HEADERS, timeout=10)
+    data = resp.json()
+    return [(i['f14'], i['f4']/100) for i in data['data']['diff']]
+
+def get_limit_stats():
+    url = "https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=500&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fields=f12,f14&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23"
+    resp = requests.get(url, headers=HEADERS, timeout=10)
+    text = resp.text
+    up = len(re.findall(r'"f12":"(\d+)".*?"f14":"([^"]+)"', text))
+    return up
+
+def get_daily_kline(code, days=5):
+    market = '1' if code.startswith(('6', '5')) else '0'
+    url = f"https://push2his.eastmoney.com/api/qt/stock/kline/get?secid={market}.{code}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55&klt=101&fqt=1&end=20500101&lmt={days}"
+    resp = requests.get(url, headers=HEADERS, timeout=10)
+    data = resp.json()
+    if data.get('data') and data['data'].get('klines'):
+        return data['data']['klines']
+    return []
+
+# 生成复盘报告
+indices = get_market_indices()
+limit_up = get_limit_stats()
+
+text = f"""📋 【每日复盘 V4.3.1】
+{datetime.now().strftime('%Y-%m-%d')}
+
+━━━━━━━━━━━━━━━━━━
+📊 今日大盘
+
+"""
+for name, pct in indices:
+    text += f"{'🟢' if pct > 0 else '🔴'} {name}: {pct:+.2f}%\n"
+
+text += f"""
+━━━━━━━━━━━━━━━━━━
+📈 涨停: {limit_up}家
+"""
+
+# 检查持仓复盘
+try:
+    with open('portfolio_data.json', 'r') as f:
+        portfolio = json.load(f)
+    if portfolio.get('positions'):
+        text += "\n📌 持仓复盘\n"
+        for pos in portfolio['positions']:
+            klines = get_daily_kline(pos['code'], 5)
+            if klines:
+                last = klines[-1].split(',')
+                close = float(last[2])
+                entry = pos['entry_price']
+                profit = (close - entry) / entry * 100
+                text += f"• {pos['name']}: {profit:+.1f}%\n"
+except:
+    pass
+
+text += """
+━━━━━━━━━━━━━━━━━━
+⚠️ 以上仅供参考，不构成投资建议
+"""
+
+# 推送
+requests.post(FEISHU_WEBHOOK, json={"msg_type": "text", "content": {"text": text}}, timeout=10)
+print("复盘报告已推送")
+EOF

@@ -2,170 +2,180 @@
 
 ## 📋 系统概述
 
-这是一个基于严格量化规则的A股沪深主板中短线量化选股与持仓监控系统。
+这是一个基于严格量化规则的A股沪深主板中短线量化选股与持仓监控系统，支持**飞书机器人实时推送 + GitHub Actions自动运行**，**完全免费、0积分消耗**。
+
+---
+
+## 🚀 快速部署（5分钟完成）
+
+### 第一步：获取飞书Webhook
+
+1. 打开飞书群 → 设置 → 群机器人 → 添加机器人 → **自定义机器人**
+2. 机器人名称：`V4.3.1智能助手`
+3. 复制Webhook地址（格式：`https://open.feishu.cn/open-apis/bot/v2/hook/xxx`）
+4. 把Webhook地址告诉我，我会帮你配置
+
+### 第二步：推送代码到GitHub
+
+代码已准备好，只需推送到GitHub即可自动运行：
+
+```bash
+cd dragon-strategy-v3.8
+git add .
+git commit -m "V4.3.1 飞书智能助手部署"
+git push origin main
+```
+
+### 第三步：在GitHub启用Actions
+
+1. 进入仓库 `fys2388/dragon-strategy-v4.3`
+2. 点击 **Actions** 标签
+3. 点击 **I understand my workflows, go ahead and enable them**
+4. 系统将自动开始运行！
+
+---
+
+## ⚡ 系统能力
+
+### 🤖 自动运行（完全免费）
+
+| 功能 | 说明 |
+|------|------|
+| **实时大盘评分** | 每5分钟获取指数数据，7分制评分 |
+| **每日选股** | 9:25自动扫描涨停板，过滤出符合条件标的 |
+| **持仓监控** | 每5分钟检查持仓，触发卖出信号立即推送 |
+| **每日复盘** | 收盘后18:00自动生成复盘报告 |
+
+### 📱 飞书机器人交互
+
+在飞书群中发送以下指令，机器人自动回复：
+
+| 指令 | 功能 |
+|------|------|
+| `大盘评分` | 查看当前大盘评分和指数涨跌 |
+| `今日选股` | 查看符合V4.3.1条件的预选标的 |
+| `持仓` | 查看当前持仓盈亏和卖出信号 |
+| `600519` | 分析指定股票（任意6位代码） |
+| `路径A规则` | 查看超跌反弹策略规则 |
+| `路径B规则` | 查看强势龙头策略规则 |
+| `卖出规则` | 查看止盈止损规则 |
+| `帮助` | 查看所有可用指令 |
+
+---
 
 ## 🏗️ 系统架构
 
 ```
-dragon-strategy-v3.8/
-├── v4_quant_scanner.py       # 核心选股扫描器
-├── v4_portfolio_manager.py    # 持仓管理器
-├── portfolio_data.json        # 持仓数据文件
-└── requirements.txt           # Python依赖
-.github/workflows/
-└── intraday.yml              # GitHub Actions盘中监控
+dragon-strategy-v4.3/
+├── v4_quant_scanner.py         # 核心选股扫描器
+├── v4_portfolio_manager.py      # 持仓管理器
+├── feishu_chat_handler.py      # 飞书聊天处理器
+├── portfolio_data.json          # 持仓数据
+├── config/                     # 配置文件
+├── data/                       # 数据源模块
+│   ├── v4_data_source.py       # 东方财富数据源
+│   ├── eastmoney_source.py
+│   └── macd_calculator.py
+└── .github/workflows/
+    └── stock_trade.yml         # GitHub Actions工作流
 ```
 
-## ⚙️ 核心模块
+---
 
-### 1. V4量化选股扫描器 (`v4_quant_scanner.py`)
+## 📊 V4.3.1 核心策略
 
-**功能：**
-- 大盘环境评分（7分制，≥4分才可开仓）
-- 硬性准入条件过滤（价格、市值、成交额、ST过滤）
-- 双路径独立筛选：
-  - 路径A：超跌反弹左侧池（近12月跌幅≥30%）
-  - 路径B：强势龙头右侧池（近3月跌幅10-25%）
-- 周线五大形态识别
-- MACD量化信号判定（底背离、金叉、红柱放大）
+### 大盘7分制评分
 
-**数据源：** NeoData金融数据服务
+| 指标 | 条件 | 得分 |
+|------|------|------|
+| 指数翻红 | 全部指数上涨 | +2分 |
+| 涨停家数 | ≥50家 | +2分 |
+| 市场活跃 | 创业板涨幅>0.5% | +1分 |
+| 跌停正常 | 跌停<10家 | +1分 |
+| 板块效应 | 有涨停集中板块 | +1分 |
 
-### 2. 持仓管理器 (`v4_portfolio_manager.py`)
+**开仓条件：评分≥4分**
 
-**功能：**
-- 持仓记录（买入日期、价格、数量、目标价）
-- 自动计算止盈止损位
-- 交易历史记录
-- 绩效统计
+### 硬过滤条件
 
-**CLI命令：**
+- ✅ 主板：60/00开头
+- ✅ 价格：5-20元
+- ✅ 市值：40-200亿
+- ✅ 成交额：日≥3亿
+- ❌ 过滤：ST股、涨跌停
+
+### 双路径选股
+
+**路径A - 超跌反弹**
+- 近12月跌幅≥30%
+- 配合周线见底形态
+- 强调低吸
+
+**路径B - 强势龙头**
+- 近3月跌幅10-25%
+- 周线多头排列
+- 强调顺势
+
+### 卖出规则
+
+**硬性止损（必须执行）**
+- 周线收盘跌破60日均线
+- 日线放量跌破60日线
+
+**分阶段止盈**
+- 阶段一：+15% → 减仓50%
+- 阶段二：+30% → 再减30%
+- 阶段三：+50% → 清仓
+
+**动态止盈**
+- 从最高点回落8%离场
+
+---
+
+## 🔧 本地开发
+
+### 安装依赖
+
 ```bash
-# 查看持仓状态
-python v4_portfolio_manager.py status
+pip install requests
+```
 
+### 运行选股扫描
+
+```bash
+python v4_quant_scanner.py
+```
+
+### 管理持仓
+
+```bash
 # 添加持仓
-python v4_portfolio_manager.py add --code 600519 --name "贵州茅台" --path B --pattern "周线突破平台" --price 1680.50 --quantity 100
+python v4_portfolio_manager.py add --code 600519 --name "贵州茅台" --price 1680.50 --quantity 100
 
 # 卖出持仓
-python v4_portfolio_manager.py sell --code 600519 --price 1750.00 --reason "阶段止盈1"
+python v4_portfolio_manager.py sell --code 600519 --price 1750.00
 
-# 监控所有持仓
-python v4_portfolio_manager.py monitor
-
-# 查看交易历史
-python v4_portfolio_manager.py history
-
-# 查看绩效统计
-python v4_portfolio_manager.py stats
+# 查看持仓
+python v4_portfolio_manager.py status
 ```
 
-### 3. 盘中实时监控 (`intraday.yml`)
-
-**GitHub Actions定时任务：**
-- 工作日9:30-11:30 每5分钟执行
-- 工作日13:00-14:30 每5分钟执行
-
-**监控内容：**
-1. **首板预警**：扫描符合条件的盘中首板标的
-2. **持仓卖出信号**：
-   - 硬性止损（周线破位/放量破60日线/连续破5日线）
-   - 分阶段止盈（+15%/+30%/+50%）
-   - 动态止盈（从最高回落8%）
-   - 异常离场（板块大跌/连续缩量）
-
-## 🚀 使用流程
-
-### 第一步：配置GitHub Secrets
-
-在GitHub仓库 Settings → Secrets → Actions 中添加：
-
-| Secret名称 | 说明 |
-|-----------|------|
-| `WORKBUDDY_API_KEY` | WorkBuddy API密钥 |
-| `WORKBUDDY_BOT_ID` | WorkBuddy机器人ID |
-| `WORKBUDDY_SESSION_ID` | WorkBuddy会话ID（可选） |
-| `FEISHU_WEBHOOK` | 飞书Webhook地址 |
-
-### 第二步：推送到GitHub
+### 测试飞书推送
 
 ```bash
-git add .
-git commit -m "Add V4.3.1 quantitative trading system"
-git push
+python feishu_chat_handler.py "大盘评分"
 ```
 
-### 第三步：选股与推荐
+---
 
-1. 每日9:15 盘前，系统基于前日数据自动扫描选股
-2. WorkBuddy AI根据量化结果给出推荐标的和低吸区间
-3. 你决定是否买入
+## ⚠️ 免责声明
 
-### 第四步：记录持仓
+- 本系统仅供个人学习研究使用
+- 所有分析结果仅供参考，不构成任何投资建议
+- 投资有风险，决策需谨慎
+- 请根据自身情况独立判断
 
-买入后，在WorkBuddy中告诉我：
-```
-买入600519贵州茅台，路径B，周线突破平台，100股，价格1680.50
-```
-
-我会：
-1. 记录到 `portfolio_data.json`
-2. 自动计算止损价和止盈目标
-3. 开始监控
-
-### 第五步：自动预警
-
-- 盘中每5分钟自动检查持仓
-- 触发卖出信号 → 飞书推送提醒
-- 首板预警机会 → 飞书推送提醒
-
-## 📊 绩效指标
-
-系统自动追踪：
-- 胜率
-- 平均盈亏比
-- 最大回撤
-- 路径A/路径B单独绩效
-
-## ⚠️ 执行铁律
-
-1. 路径A只配超跌周线，路径B只配多头周线，不混配
-2. 大盘评分<4分一律空仓
-3. 只做沪深主板，不碰创业/科创/北交所/ST
-4. 严格按量化低吸区间买入，不追高
-5. 触发卖出信号立即执行，不侥幸
-
-## 🔧 技术栈
-
-- Python 3.10+
-- NeoData金融数据API
-- GitHub Actions（自动化调度）
-- 飞书Webhook（实时推送）
-
-## 📝 数据格式
-
-### 持仓数据 (`portfolio_data.json`)
-
-```json
-{
-  "positions": [{
-    "code": "600519",
-    "name": "贵州茅台",
-    "path": "B",
-    "pattern": "周线突破平台",
-    "entry_date": "2026-05-10",
-    "entry_price": 1680.50,
-    "quantity": 100,
-    "stop_loss": 1562.87,
-    "phase1_target": 1932.58,
-    "phase2_target": 2184.65,
-    "phase3_target": 2520.75,
-    "peak_price": 1680.50
-  }],
-  "history": []
-}
-```
+---
 
 ## 📞 支持
 
-如有问题，在WorkBuddy中随时咨询。
+如有问题，在飞书群中发送 `帮助` 查看所有指令。

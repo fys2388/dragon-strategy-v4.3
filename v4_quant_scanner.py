@@ -833,6 +833,8 @@ if __name__ == '__main__':
     
     # 保存结果
     import json
-    with open('dragon-strategy-v3.8/reports/output/scan_result.json', 'w', encoding='utf-8') as f:
+    import os
+    os.makedirs('reports/output', exist_ok=True)
+    with open('reports/output/scan_result.json', 'w', encoding='utf-8') as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
     print("\n结果已保存到 reports/output/scan_result.json")
