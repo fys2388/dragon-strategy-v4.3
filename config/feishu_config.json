@@ -1,7 +1,7 @@
 {
   "version": "3.8",
   "飞书配置": {
-    "webhook": "https://open.feishu.cn/open-apis/bot/v2/hook/2ce9965c-9e1b-4bb9-8747-6fd129b36c32",
+    "webhook": "https://open.feishu.cn/open-apis/bot/v2/hook/8cb1308d-2c0e-4e16-9e7e-aafd4c970c51",
     "enabled": true
   },
   "发送时间": {

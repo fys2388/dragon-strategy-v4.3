@@ -14,7 +14,7 @@ from datetime import datetime
 # ============================================================
 # 配置
 # ============================================================
-FEISHU_WEBHOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/2ce9965c-9e1b-4bb9-8747-6fd129b36c32"
+FEISHU_WEBHOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/8cb1308d-2c0e-4e16-9e7e-aafd4c970c51"
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
     'Referer': 'https://finance.eastmoney.com/',
