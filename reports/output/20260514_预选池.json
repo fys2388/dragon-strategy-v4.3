@@ -1,0 +1,52 @@
+{
+  "date": "20260514",
+  "generated_at": "2026-05-14T09:16:26.405039",
+  "market_score": 2,
+  "can_open": false,
+  "market_details": {
+    "total_score": 2,
+    "max_score": 8,
+    "can_open": false,
+    "open_threshold": 5,
+    "details": {
+      "沪指vs20日均线": {
+        "score": 0,
+        "max": 2,
+        "detail": "沪指0在20日均线0下方"
+      },
+      "前一日涨停家数": {
+        "score": 1,
+        "max": 2,
+        "detail": "主板涨停37家（≥30家，得1分）"
+      },
+      "首板平均溢价率": {
+        "score": 0,
+        "max": 2,
+        "detail": "首板溢价率0.00%（<2%，得0分）"
+      },
+      "炸板率": {
+        "score": 0,
+        "max": 1,
+        "detail": "炸板率50.0%（≥30%，得0分）"
+      },
+      "跌停家数": {
+        "score": 1,
+        "max": 1,
+        "detail": "跌停0家（<10家，得1分）"
+      }
+    },
+    "market_data": {
+      "上证指数": {},
+      "深证成指": {},
+      "涨停统计": {
+        "mainboard_count": 37,
+        "first_board_count": 0,
+        "continue_board_count": 37,
+        "break_board_rate": 50,
+        "limit_down_count": 0
+      },
+      "首板溢价率": 0.0
+    }
+  },
+  "stocks": []
+}

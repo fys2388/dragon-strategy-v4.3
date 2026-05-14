@@ -1,0 +1,31 @@
+{
+  "positions": [
+    {
+      "code": "600519",
+      "name": "贵州茅台",
+      "path": "B",
+      "pattern": "周线突破平台",
+      "entry_date": "2026-05-10",
+      "entry_price": 1680.50,
+      "quantity": 100,
+      "stop_loss": 1562.87,
+      "phase1_target": 1932.58,
+      "phase2_target": 2184.65,
+      "phase3_target": 2520.75,
+      "peak_price": 1720.00,
+      "notes": "路径B首次买入测试"
+    }
+  ],
+  "history": [
+    {
+      "date": "2026-05-10",
+      "code": "600519",
+      "name": "贵州茅台",
+      "action": "BUY",
+      "price": 1680.50,
+      "quantity": 100,
+      "reason": "路径B 周线突破平台",
+      "profit_pct": 0
+    }
+  ]
+}
