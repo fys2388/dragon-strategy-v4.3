@@ -9,7 +9,7 @@ import re
 import time
 from datetime import datetime
 
-FEISHU_WEBHOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/8cb1308d-2c0e-4e16-9e7e-aafd4c970c51"
+FEISHU_WEBHOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/b6c4a662-53d7-456a-89cf-6cebccdbc88f"
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
     'Referer': 'https://finance.eastmoney.com/',
