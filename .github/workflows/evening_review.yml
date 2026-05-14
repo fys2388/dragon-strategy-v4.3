@@ -1,0 +1,29 @@
+name: Evenning Review Push
+on:
+  schedule:
+    # 北京时间 18:00 = UTC 10:00，周一到周五
+    - cron: '0 10 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  push_review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: pip install requests --quiet
+
+      - name: Run Review Push
+        run: python3 scripts/daily_review_push.py
+
+      - name: Done
+        run: echo "Evenning review pushed at $(date)"
