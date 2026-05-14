@@ -1,0 +1,26 @@
+name: Manual Trigger Test
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send test message
+        run: |
+          pip install requests -q
+          python3 << 'PYEOF'
+import requests
+import json
+from datetime import datetime
+
+WEBHOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/8cb1308d-2c0e-4e16-9e7e-aafd4c970c51"
+
+message = f"""Test Message from GitHub Actions
+Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+Status: SUCCESS!"""
+
+payload = {"msg_type": "text", "content": {"text": message}}
+resp = requests.post(WEBHOOK, json=payload, timeout=10)
+print(f"Response: {resp.status_code} - {resp.text}")
+PYEOF
