@@ -17,8 +17,19 @@ from datetime import datetime
 FEISHU_WEBHOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/2ce9965c-9e1b-4bb9-8747-6fd129b36c32"
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-    'Referer': 'https://finance.eastmoney.com/'
+    'Referer': 'https://finance.eastmoney.com/',
+    'Accept': 'application/json, text/plain, */*',
+    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'
 }
+
+# 代理设置（GitHub Actions无需代理）
+import os
+PROXIES = None
+if os.environ.get('GITHUB_ACTIONS') is None:
+    # 本地开发环境可能需要代理
+    http_proxy = os.environ.get('HTTP_PROXY') or os.environ.get('http_proxy')
+    if http_proxy:
+        PROXIES = {'http': http_proxy, 'https': http_proxy}
 
 # ============================================================
 # 东方财富数据接口
@@ -525,7 +536,13 @@ def handle_command(command):
 • "贵州茅台600519"
 • "现在可以买吗"
 • "给我讲讲路径A"
-• "我的持仓怎么样""""
+• "我的持仓怎么样"
+
+━━━━━━━━━━━━━━━━━━
+📝 使用说明
+• 直接发送股票代码查询分析
+• 发送中文指令获取对应功能
+• 盘中时段可获取实时选股建议"""
     
     # 默认回复
     return """🤖 您好，我是V4.3.1智能助手
