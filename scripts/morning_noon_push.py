@@ -1,28 +1,54 @@
 """
 盘前报告 + 午评推送
 每天 9:15 盘前推送，12:00 午评推送
+支持代理绕过海外IP限制
 """
 
 import requests
 import json
 import re
+import os
 import time
 from datetime import datetime
 
 FEISHU_WEBHOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/b6c4a662-53d7-456a-89cf-6cebccdbc88f"
+
+# 尝试从环境变量读取代理
+PROXY = os.environ.get('HTTP_PROXY') or os.environ.get('HTTPS_PROXY')
+PROXIES = {'http': PROXY, 'https': PROXY} if PROXY else None
+
 HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-    'Referer': 'https://finance.eastmoney.com/',
-    'Accept': 'application/json',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Referer': 'https://quote.eastmoney.com/',
+    'Accept': 'application/json, text/javascript, */*',
+    'Accept-Language': 'zh-CN,zh;q=0.9',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Connection': 'keep-alive',
 }
+
+def fetch_with_retry(url, max_retries=3):
+    """带重试的请求"""
+    for i in range(max_retries):
+        try:
+            resp = requests.get(url, headers=HEADERS, proxies=PROXIES, timeout=15)
+            if resp.status_code == 200:
+                return resp
+            time.sleep(1)
+        except Exception as e:
+            if i == max_retries - 1:
+                print(f"请求失败({url}): {e}")
+            time.sleep(1)
+    return None
 
 def get_realtime_quotes(codes):
     if not codes:
         return {}
     secids = ','.join(codes)
     url = f"https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&invt=2&ut=b2884a393a59ad64002217a3e73fc9db&fields=f12,f14,f3,f4,f5,f6,f7,f8,f15,f16,f17,f18&secids={secids}"
+    resp = fetch_with_retry(url)
+    if not resp:
+        return {}
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=10)
         data = resp.json()
         result = {}
         if data.get('data') and data['data'].get('diff'):
@@ -40,8 +66,10 @@ def get_realtime_quotes(codes):
 
 def get_limit_up_stocks():
     url = "https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=100&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fields=f12,f14&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23"
+    resp = fetch_with_retry(url)
+    if not resp:
+        return []
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=10)
         matches = re.findall(r'"f12":"(\d+)".*?"f14":"([^"]+)"', resp.text)
         return [{'code': m[0], 'name': m[1]} for m in matches if not m[1].startswith('ST')]
     except:
@@ -56,7 +84,7 @@ def calculate_market_score():
     indices = get_market_indices()
 
     if not indices:
-        return 0, ["数据获取失败"]
+        return None, ["数据获取失败（海外IP可能被限制，建议配置代理或改用本地运行）"]
 
     green_count = sum(1 for i in indices.values() if i['change_pct'] > 0)
     if green_count >= 3:
@@ -93,14 +121,19 @@ def calculate_market_score():
         score += 1
         reasons.append("板块效应存在")
 
-    return score, reasons
+    return score, reasons, limit_up
 
 def build_morning_report():
     """盘前报告"""
     today = datetime.now().strftime('%Y年%m月%d日')
-    score, reasons = calculate_market_score()
+    result = calculate_market_score()
     indices = get_market_indices()
-    limit_up = get_limit_up_stocks()
+
+    if result[0] is None:
+        score, reasons = 0, result[1]
+        limit_up = []
+    else:
+        score, reasons, limit_up = result
 
     lines = [
         f"📋 盘前报告 {today} V4.3.1",
@@ -114,19 +147,22 @@ def build_morning_report():
             emoji = "🟢" if pct > 0 else "🔴"
             lines.append(f"{emoji} {data['name']}: {pct:+.2f}%")
     else:
-        lines.append("数据获取中...")
+        lines.append("⚠️ 数据获取失败")
+        lines.append("（GitHub Actions 海外IP可能被东方财富限制）")
+        lines.append("建议：配置代理，或改用本地 Windows 计划任务运行")
 
     lines.append("")
     lines.append(f"【涨停统计】")
-    lines.append(f"昨日涨停：{len(limit_up)}只")
+    lines.append(f"涨停家数：{len(limit_up)}只")
 
     lines.append("")
     lines.append("【大盘评分】")
-    lines.append(f"综合评分：{score}/7")
+    if score is not None:
+        lines.append(f"综合评分：{score}/7")
     for r in reasons:
         lines.append(f"• {r}")
 
-    can_open = "✅ 可以开仓" if score >= 4 else "⚠️ 观望为主"
+    can_open = "✅ 可以开仓" if score and score >= 4 else "⚠️ 观望为主"
     lines.append(f"\n操作建议：{can_open}")
 
     lines.append("")
@@ -138,9 +174,14 @@ def build_morning_report():
 def build_noon_report():
     """午评报告"""
     today = datetime.now().strftime('%Y年%m月%d日')
-    score, reasons = calculate_market_score()
+    result = calculate_market_score()
     indices = get_market_indices()
-    limit_up = get_limit_up_stocks()
+
+    if result[0] is None:
+        score, reasons = 0, result[1]
+        limit_up = []
+    else:
+        score, reasons, limit_up = result
 
     lines = [
         f"☀️ 午间点评 {today} V4.3.1",
@@ -154,7 +195,8 @@ def build_noon_report():
             emoji = "🟢" if pct > 0 else "🔴"
             lines.append(f"{emoji} {data['name']}: {pct:+.2f}%")
     else:
-        lines.append("数据获取中...")
+        lines.append("⚠️ 数据获取失败")
+        lines.append("（GitHub Actions 海外IP可能被东方财富限制）")
 
     lines.append("")
     lines.append(f"【涨停统计】")
@@ -172,11 +214,12 @@ def build_noon_report():
 
     lines.append("")
     lines.append("【大盘评分】")
-    lines.append(f"综合评分：{score}/7")
+    if score is not None:
+        lines.append(f"综合评分：{score}/7")
     for r in reasons:
         lines.append(f"• {r}")
 
-    can_open = "✅ 可以考虑开仓" if score >= 4 else "⚠️ 观望为主，严控仓位"
+    can_open = "✅ 可以考虑开仓" if score and score >= 4 else "⚠️ 观望为主，严控仓位"
     lines.append(f"\n操作建议：{can_open}")
 
     lines.append("")
