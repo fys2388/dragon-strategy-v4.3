@@ -13,24 +13,21 @@ from datetime import datetime
 
 FEISHU_WEBHOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/b6c4a662-53d7-456a-89cf-6cebccdbc88f"
 
-# 尝试从环境变量读取代理
-PROXY = os.environ.get('HTTP_PROXY') or os.environ.get('HTTPS_PROXY')
-PROXIES = {'http': PROXY, 'https': PROXY} if PROXY else None
-
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     'Referer': 'https://quote.eastmoney.com/',
     'Accept': 'application/json, text/javascript, */*',
     'Accept-Language': 'zh-CN,zh;q=0.9',
     'Accept-Encoding': 'gzip, deflate, br',
-    'Connection': 'keep-alive',
 }
 
 def fetch_with_retry(url, max_retries=3):
-    """带重试的请求"""
+    """带重试的请求，绕过系统代理"""
     for i in range(max_retries):
         try:
-            resp = requests.get(url, headers=HEADERS, proxies=PROXIES, timeout=15)
+            session = requests.Session()
+            session.trust_env = False  # 绕过系统代理
+            resp = session.get(url, headers=HEADERS, timeout=15)
             if resp.status_code == 200:
                 return resp
             time.sleep(1)
@@ -41,39 +38,104 @@ def fetch_with_retry(url, max_retries=3):
     return None
 
 def get_realtime_quotes(codes):
+    """获取实时行情，优先东方财富，失败则用新浪"""
     if not codes:
         return {}
+
+    # 优先：东方财富
     secids = ','.join(codes)
-    url = f"https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&invt=2&ut=b2884a393a59ad64002217a3e73fc9db&fields=f12,f14,f3,f4,f5,f6,f7,f8,f15,f16,f17,f18&secids={secids}"
-    resp = fetch_with_retry(url)
-    if not resp:
-        return {}
+    url_em = f"https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&invt=2&ut=b2884a393a59ad64002217a3e73fc9db&fields=f12,f14,f3,f4,f5,f6,f7,f8,f15,f16,f17,f18&secids={secids}"
+    resp = fetch_with_retry(url_em)
+    if resp:
+        try:
+            data = resp.json()
+            result = {}
+            if data.get('data') and data['data'].get('diff'):
+                for item in data['data']['diff']:
+                    result[item['f12']] = {
+                        'code': item['f12'], 'name': item['f14'],
+                        'price': item['f3'], 'change_pct': item['f4'] / 100 if item.get('f4') else 0,
+                        'volume': item['f5'], 'amount': item['f6'],
+                        'high': item['f15'], 'low': item['f16'],
+                        'open': item['f17'], 'pre_close': item['f18']
+                    }
+            if result:
+                return result
+        except:
+            pass
+
+    # 备用：新浪财经
+    sina_codes = []
+    for c in codes:
+        if c.startswith('1.'):
+            sina_codes.append(f"sh{c[2:]}")
+        elif c.startswith('0.'):
+            sina_codes.append(f"sz{c[2:]}")
+
+    url_sina = f"https://hq.sinajs.cn/list={','.join(sina_codes)}"
     try:
-        data = resp.json()
-        result = {}
-        if data.get('data') and data['data'].get('diff'):
-            for item in data['data']['diff']:
-                result[item['f12']] = {
-                    'code': item['f12'], 'name': item['f14'],
-                    'price': item['f3'], 'change_pct': item['f4'] / 100 if item.get('f4') else 0,
-                    'volume': item['f5'], 'amount': item['f6'],
-                    'high': item['f15'], 'low': item['f16'],
-                    'open': item['f17'], 'pre_close': item['f18']
-                }
-        return result
+        session = requests.Session()
+        session.trust_env = False
+        resp = session.get(url_sina, headers={'Referer': 'https://finance.sina.com.cn/', 'User-Agent': 'Mozilla/5.0'}, timeout=10)
+        if resp.status_code == 200:
+            text = resp.text
+            result = {}
+            pattern = r'hq_str_[ts](\w+)=\"([^"]+)\"'
+            matches = re.findall(pattern, text)
+            for m in matches:
+                code, data = m
+                parts = data.split(',')
+                if len(parts) > 10:
+                    name = parts[0]
+                    price = float(parts[1]) if parts[1] else 0
+                    prev_close = float(parts[2]) if parts[2] else price
+                    change = price - prev_close
+                    change_pct = (change / prev_close * 100) if prev_close else 0
+                    result[code] = {
+                        'code': code, 'name': name,
+                        'price': price, 'change_pct': change_pct,
+                        'volume': 0, 'amount': 0,
+                        'high': float(parts[4]) if parts[4] else price,
+                        'low': float(parts[5]) if parts[5] else price,
+                        'open': float(parts[1]) if parts[1] else price,
+                        'pre_close': prev_close
+                    }
+            if result:
+                return result
     except:
-        return {}
+        pass
+
+    return {}
 
 def get_limit_up_stocks():
-    url = "https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=100&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fields=f12,f14&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23"
-    resp = fetch_with_retry(url)
-    if not resp:
-        return []
+    """获取涨停股票列表，尝试多个备用接口"""
+    # 方法1: 东方财富涨停接口
+    url1 = "https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=100&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fields=f12,f14&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23"
+
+    for url in [url1]:
+        resp = fetch_with_retry(url)
+        if resp:
+            try:
+                matches = re.findall(r'"f12":"(\d+)".*?"f14":"([^"]+)"', resp.text)
+                result = [{'code': m[0], 'name': m[1]} for m in matches if not m[1].startswith('ST')]
+                if result:
+                    return result
+            except:
+                pass
+
+    # 方法2: 备用 - 使用涨停榜API
     try:
-        matches = re.findall(r'"f12":"(\d+)".*?"f14":"([^"]+)"', resp.text)
-        return [{'code': m[0], 'name': m[1]} for m in matches if not m[1].startswith('ST')]
+        session = requests.Session()
+        session.trust_env = False
+        url2 = "https://hq.sinajs.cn/list=sh000001,sz399001,sz399006,sh000300"
+        resp = session.get(url2, headers={'Referer': 'https://finance.sina.com.cn/', 'User-Agent': 'Mozilla/5.0'}, timeout=10)
+        # 如果指数能拿到，至少说明网络通
+        if resp.status_code == 200:
+            print("警告: 涨停数据获取失败，跳过涨停统计")
     except:
-        return []
+        pass
+
+    return []
 
 def get_market_indices():
     return get_realtime_quotes(['1.000001', '0.399001', '0.399006', '1.000300'])
@@ -82,9 +144,11 @@ def calculate_market_score():
     score = 0
     reasons = []
     indices = get_market_indices()
+    limit_up = get_limit_up_stocks()
+    cnt = len(limit_up)
 
     if not indices:
-        return None, ["数据获取失败（海外IP可能被限制，建议配置代理或改用本地运行）"]
+        return None, ["数据获取失败"], []
 
     green_count = sum(1 for i in indices.values() if i['change_pct'] > 0)
     if green_count >= 3:
@@ -96,18 +160,19 @@ def calculate_market_score():
     else:
         reasons.append("主要指数全部下跌")
 
-    limit_up = get_limit_up_stocks()
-    cnt = len(limit_up)
-    if cnt >= 50:
-        score += 2
-        reasons.append(f"涨停{cnt}只，市场活跃")
-    elif cnt >= 30:
-        score += 1
-        reasons.append(f"涨停{cnt}只，氛围尚可")
-    elif cnt >= 10:
-        reasons.append(f"涨停{cnt}只，氛围一般")
+    if cnt > 0:
+        if cnt >= 50:
+            score += 2
+            reasons.append(f"涨停{cnt}只，市场活跃")
+        elif cnt >= 30:
+            score += 1
+            reasons.append(f"涨停{cnt}只，氛围尚可")
+        elif cnt >= 10:
+            reasons.append(f"涨停{cnt}只，氛围一般")
+        else:
+            reasons.append(f"涨停{cnt}只，情绪低迷")
     else:
-        reasons.append(f"涨停{cnt}只，情绪低迷")
+        reasons.append("涨停数据获取失败（参考指数判断）")
 
     sz = indices.get('399006', {})
     if sz.get('change_pct', 0) > 0.5:
@@ -148,8 +213,6 @@ def build_morning_report():
             lines.append(f"{emoji} {data['name']}: {pct:+.2f}%")
     else:
         lines.append("⚠️ 数据获取失败")
-        lines.append("（GitHub Actions 海外IP可能被东方财富限制）")
-        lines.append("建议：配置代理，或改用本地 Windows 计划任务运行")
 
     lines.append("")
     lines.append(f"【涨停统计】")
