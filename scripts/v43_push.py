@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import datetime, requests, time, random, os
+import pytz
 
 FEISHU_WEBHOOK = os.environ.get('FEISHU_WEBHOOK_URL', 'https://open.feishu.cn/open-apis/bot/v2/hook/b6c4a662-53d7-456a-89cf-6cebccdbc88f')
 
@@ -120,7 +121,8 @@ def send_feishu(content):
         print(f"飞书推送失败: {e}")
 
 def main():
-    now = datetime.datetime.now()
+    tz = pytz.timezone('Asia/Shanghai')
+    now = datetime.datetime.now(tz)
     print(f"开始执行V4.4.0策略推送: {now.strftime('%Y-%m-%d %H:%M:%S')}")
     
     idx_data = get_index_web()
