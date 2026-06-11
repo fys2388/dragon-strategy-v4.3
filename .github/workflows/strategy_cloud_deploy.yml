@@ -14,6 +14,11 @@ on:
     - cron: '45 6 * * 1-5'
     - cron: '0 10 * * 1-5'
   workflow_dispatch:
+    inputs:
+      test_mode:
+        description: '启用测试模式（跳过交易时段检查）'
+        type: boolean
+        default: false
 
 jobs:
   run-strategy-push:
@@ -37,6 +42,7 @@ jobs:
         env:
           FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
           IS_CLOUD: "true"
+          TEST_MODE: ${{ inputs.test_mode || 'false' }}
         run: |
           python scripts/v43_push.py
         continue-on-error: false

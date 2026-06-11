@@ -3,6 +3,7 @@ import datetime, requests, time, random, os, sys
 
 FEISHU_WEBHOOK = os.getenv("FEISHU_WEBHOOK", "")
 IS_CLOUD = os.getenv("IS_CLOUD", "false").lower() == "true"
+TEST_MODE = os.getenv("TEST_MODE", "false").lower() == "true"
 
 sys.stdout = open("stock_push.log", "a", encoding="utf-8")
 sys.stderr = open("stock_push.log", "a", encoding="utf-8")
@@ -219,14 +220,17 @@ def main():
     now = datetime.datetime.now()
     print(f"脚本启动时间: {now.strftime('%Y-%m-%d %H:%M:%S')}")
     
-    weekday = now.weekday()
-    if weekday >= 5:
-        print("周末非交易时段，退出")
-        exit()
-    hour, minute = now.hour, now.minute
-    if (hour < 9 or (hour == 9 and minute < 15)) or (hour > 15) or (hour == 11 and minute > 30) or (hour == 12):
-        print("非交易时段，退出")
-        exit()
+    if not TEST_MODE:
+        weekday = now.weekday()
+        if weekday >= 5:
+            print("周末非交易时段，退出")
+            exit()
+        hour, minute = now.hour, now.minute
+        if (hour < 9 or (hour == 9 and minute < 15)) or (hour > 15) or (hour == 11 and minute > 30) or (hour == 12):
+            print("非交易时段，退出")
+            exit()
+    else:
+        print("测试模式：跳过交易时段检查")
     
     is_intraday = (hour in [10, 11, 13, 14]) and not (hour == 11 and minute == 30)
     idx_data = get_index_eastmoney()
