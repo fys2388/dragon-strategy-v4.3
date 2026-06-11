@@ -39,7 +39,7 @@ def get_index_web():
 def get_limit_up_eastmoney():
     url = "https://push2.eastmoney.com/api/qt/clist/get"
     headers = {"User-Agent": random.choice(["Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Edge/125.0.0.0"]), "Referer": "https://www.eastmoney.com/"}
-    params = {"pn": 1, "pz": 5000, "po": 1, "np": 1, "ut": "bd1d9ddb04089700cf9c27f6f7426281", "fltt": 2, "invt": 2, "fid": "f3", "fs": "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048", "fields": "f1,f2,f3,f4,f5,f6,f7,f8,f10,f12,f13,f14"}
+    params = {"pn": 1, "pz": 5000, "po": 1, "np": 1, "ut": "bd1d9ddb04089700cf9c27f6f7426281", "fltt": 2, "invt": 2, "fid": "f3", "fs": "m:0+t:6,m:0+t:80", "fields": "f1,f2,f3,f4,f5,f6,f7,f8,f10,f12,f13,f14"}
     for _ in range(3):
         try:
             time.sleep(random.uniform(1, 3))
@@ -48,6 +48,22 @@ def get_limit_up_eastmoney():
                 diff = r.json().get("data", {}).get("diff", [])
                 if diff:
                     return {"mainboard_count": len([d for d in diff if float(d.get("f3", 0)) >= 9.8])}
+        except:
+            time.sleep(2)
+    return None
+
+def get_limit_down_eastmoney():
+    url = "https://push2.eastmoney.com/api/qt/clist/get"
+    headers = {"User-Agent": random.choice(["Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Edge/125.0.0.0"]), "Referer": "https://www.eastmoney.com/"}
+    params = {"pn": 1, "pz": 5000, "po": -1, "np": 1, "ut": "bd1d9ddb04089700cf9c27f6f7426281", "fltt": 2, "invt": 2, "fid": "f3", "fs": "m:0+t:6,m:0+t:80", "fields": "f1,f2,f3,f4,f5,f6,f7,f8,f10,f12,f13,f14"}
+    for _ in range(3):
+        try:
+            time.sleep(random.uniform(1, 3))
+            r = requests.get(url, params=params, headers=headers, timeout=15)
+            if r.status_code == 200:
+                diff = r.json().get("data", {}).get("diff", [])
+                if diff:
+                    return {"mainboard_count": len([d for d in diff if float(d.get("f3", 0)) <= -9.8])}
         except:
             time.sleep(2)
     return None
@@ -112,7 +128,11 @@ def main():
         print("指数获取失败，终止任务")
         return
     
-    limit_up = get_limit_up(idx_data)
+    limit_up_data = get_limit_up_eastmoney()
+    limit_down_data = get_limit_down_eastmoney()
+    
+    limit_up_count = limit_up_data["mainboard_count"] if limit_up_data else "数据获取中..."
+    limit_down_count = limit_down_data["mainboard_count"] if limit_down_data else "数据获取中..."
     
     content = f"""📊 实时大盘 V4.4.0 {now.strftime('%H:%M')}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -122,10 +142,10 @@ def main():
 🟢 沪深300：{idx_data['SHSE.000300']['price']:.2f} ({idx_data['SHSE.000300']['pct']:+.2f}%)
 🟢 上证50：{idx_data['SHSE.000016']['price']:.2f} ({idx_data['SHSE.000016']['pct']:+.2f}%)
 
-主板涨停：{limit_up['mainboard_count']}只 | 主板跌停：0只
+主板涨停：{limit_up_count}只 | 主板跌停：{limit_down_count}只
 大盘评分：{get_score(idx_data)}/7分
 操作建议：{get_suggestion(idx_data)}
-数据源：东方财富网页API
+数据源：东方财富网页API（仅统计沪深主板）
 
 【符合策略推荐】
 暂无符合条件的标的
