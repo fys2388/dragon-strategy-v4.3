@@ -33,7 +33,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install requests
+          pip install requests pytz
 
       - name: Run strategy push
         run: python scripts/v43_push.py
