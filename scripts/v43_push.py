@@ -1,14 +1,27 @@
 # -*- coding: utf-8 -*-
-import datetime, requests, time, random, os, sys
+import datetime
+import requests
+import os
+import sys
+
+log_file = open("stock_push.log", "a", encoding="utf-8")
+sys.stdout = log_file
+sys.stderr = log_file
+
+print(f"\n{'='*60}")
+print(f"=== 云端策略推送启动日志 {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===")
+print(f"{'='*60}")
 
 FEISHU_WEBHOOK = os.getenv("FEISHU_WEBHOOK_URL", "")
 IS_CLOUD = os.getenv("IS_CLOUD", "false").lower() == "true"
 TEST_MODE = os.getenv("TEST_MODE", "false").lower() == "true"
 
-sys.stdout = open("stock_push.log", "a", encoding="utf-8")
-sys.stderr = open("stock_push.log", "a", encoding="utf-8")
-print(f"=== 云端策略推送启动日志 {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===")
-print(f"运行环境: {'云端GitHub Actions' if IS_CLOUD else '本地'}")
+print(f"环境: {'云端GitHub Actions' if IS_CLOUD else '本地'}")
+print(f"测试模式: {'开启' if TEST_MODE else '关闭'}")
+print(f"Webhook已配置: {'是' if FEISHU_WEBHOOK else '否'}")
+if not FEISHU_WEBHOOK:
+    print("警告: FEISHU_WEBHOOK_URL 环境变量为空!")
+print(f"Webhook前30字符: {FEISHU_WEBHOOK[:30] if FEISHU_WEBHOOK else '无'}...")
 
 def get_all_stocks_eastmoney():
     url = "https://push2.eastmoney.com/api/qt/clist/get"
@@ -34,6 +47,7 @@ def get_all_stocks_eastmoney():
                     "circulating_market_cap": d["f20"] * 1e8,
                     "price": d["f2"]
                 })
+            print(f"获取股票列表成功: {len(stocks)}只")
             return stocks
     except Exception as e:
         print(f"获取股票列表失败: {e}")
@@ -81,6 +95,7 @@ def get_index_eastmoney():
         index_data = {}
         for i, d in enumerate(diff):
             index_data[codes[i]] = {"name": d["f14"], "price": d["f2"], "pct": round(d["f3"], 2)}
+        print(f"获取指数成功: {len(index_data)}个")
         return index_data
     except Exception as e:
         print(f"获取指数失败: {e}")
@@ -103,13 +118,12 @@ def get_limit_up_eastmoney():
             return {"mainboard_count": len([d for d in diff if float(d.get("f3", 0)) >= 9.8])}
     except Exception as e:
         print(f"获取涨停数据失败: {e}")
-    return {"mainboard_count": 0, "estimated": True, "note": "数据获取失败，使用估算值"}
+    return {"mainboard_count": 0}
 
 def strategy_a():
     selected = []
     all_sym = get_all_stocks_eastmoney()
     if not all_sym:
-        print("无法获取股票列表")
         return []
     
     for s in all_sym:
@@ -154,7 +168,7 @@ def strategy_a():
                 "chg_3d": round(chg_3d, 1),
                 "vol_ratio": round(vol_ratio, 2)
             })
-        except Exception as e:
+        except Exception:
             continue
     selected.sort(key=lambda x: (x["chg_3d"], x["vol_ratio"]), reverse=True)
     return selected[:5]
@@ -166,55 +180,70 @@ def generate_push_content(is_intraday=False):
     now = datetime.datetime.now()
     
     if is_intraday:
-        content = f"""📊 盘中更新 {now.strftime('%H:%M')}
----
-上证指数：{idx_data['SHSE.000001']['price']:.2f} ({idx_data['SHSE.000001']['pct']:+.2f}%)
-【标的状态】
-"""
+        content = f"\uD83D\uDCCA 盘中更新 {now.strftime('%H:%M')}\n"
+        content += "---\n"
+        if idx_data:
+            content += f"上证指数：{idx_data['SHSE.000001']['price']:.2f} ({idx_data['SHSE.000001']['pct']:+.2f}%)\n"
+        content += "\n[\u6807\u7684\u72B6\u6001]\n"
         if stocks:
             for stk in stocks[:3]:
-                content += f"✅ {stk['name']}({stk['code']}): {stk['price']}元 | 3日涨幅{stk['chg_3d']}% | 量能倍数{stk['vol_ratio']}倍\n"
+                content += f"\u2705 {stk['name']}({stk['code']}): {stk['price']}元 | 3日{stk['chg_3d']}% | 量能{stk['vol_ratio']}倍\n"
         else:
-            content += "暂无新标的\n"
-        content += "⚠️ 触及止盈止损请及时操作"
+            content += "\u6682\u65E0\u65B0\u6807\u7684\n"
+        content += "\u26A0\uFE0F 触及止盈止损请及时操作"
     else:
+        if not idx_data:
+            return f"\uD83D\uDCCA 云端策略推送 {now.strftime('%Y-%m-%d %H:%M')}\n指数数据获取失败，请稍后重试"
         avg_pct = sum([d["pct"] for d in idx_data.values()]) / len(idx_data.values())
         score = min(7, 2 if avg_pct >= 1 else 1 if avg_pct >= 0 else 0)
-        suggestion = "🔴 弱势行情，仓位0-10%" if score <= 1 else "🟡 震荡行情，仓位10-30%" if score <= 3 else "🟢 强势行情，仓位30-50%"
-        content = f"""📊 云端策略推送 {now.strftime('%Y-%m-%d %H:%M')}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🟢 上证指数：{idx_data['SHSE.000001']['price']:.2f} ({idx_data['SHSE.000001']['pct']:+.2f}%)
-🟢 深证成指：{idx_data['SZSE.399001']['price']:.2f} ({idx_data['SZSE.399001']['pct']:+.2f}%)
-🟢 创业板指：{idx_data['SZSE.399006']['price']:.2f} ({idx_data['SZSE.399006']['pct']:+.2f}%)
-
-主板涨停：{limit_up['mainboard_count']}只
-大盘评分：{score}/7分 | 操作建议：{suggestion}
-
-【符合策略推荐】
-"""
+        suggestion = "\uD83D\uDD34 弱势行情，仓位0-10%" if score <= 1 else "\uD83D\uDFE1 震荡行情，仓位10-30%" if score <= 3 else "\uD83D\uDFE2 强势行情，仓位30-50%"
+        content = f"\uD83D\uDCCA 云端策略推送 {now.strftime('%Y-%m-%d %H:%M')}\n"
+        content += "="*40 + "\n"
+        content += f"\uD83D\uDFE2 上证指数：{idx_data['SHSE.000001']['price']:.2f} ({idx_data['SHSE.000001']['pct']:+.2f}%)\n"
+        content += f"\uD83D\uDFE2 深证成指：{idx_data['SZSE.399001']['price']:.2f} ({idx_data['SZSE.399001']['pct']:+.2f}%)\n"
+        content += f"\uD83D\uDFE2 创业板指：{idx_data['SZSE.399006']['price']:.2f} ({idx_data['SZSE.399006']['pct']:+.2f}%)\n\n"
+        content += f"\u4E3B\u677F\u6DA8\u505C\uFF1A{limit_up['mainboard_count']}只\n"
+        content += f"\u5927\u76D8\u8BC4\u5206\uFF1A{score}/7分 | \u64CD\u4F5C\u5EFA\u8BAE\uFF1A{suggestion}\n\n"
+        content += "[\u7B26\u5408\u7B56\u7565\u63A8\u8350]\n"
         if not stocks:
-            content += "暂无符合条件的标的"
+            content += "\u6682\u65E0\u7B26\u5408\u6761\u4EF6\u7684\u6807\u7684"
         else:
             for stk in stocks:
-                content += f"""✅ {stk['name']}({stk['code']})
-  现价：{stk['price']}元 | 3日涨幅：{stk['chg_3d']}%
-  7日最大涨幅：{stk['max_chg_7d']}% | 量能倍数：{stk['vol_ratio']}倍
-"""
-        content += f"""
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-V4.4.0 云端纯东方财富API方案
-"""
+                content += f"\u2705 {stk['name']}({stk['code']})\n"
+                content += f"  \u73B0\u4EF7\uFF1A{stk['price']}元 | 3日涨幅：{stk['chg_3d']}%\n"
+                content += f"  7日最大涨幅：{stk['max_chg_7d']}% | 量能倍数：{stk['vol_ratio']}倍\n\n"
+        content += "\n" + "="*40 + "\n"
+        content += "V4.4.0 云端纯东方财富API方案"
     return content
 
 def send_feishu(content):
     if not FEISHU_WEBHOOK:
         print("未配置飞书Webhook，跳过推送")
-        return
+        return False
     try:
-        requests.post(FEISHU_WEBHOOK, json={"msg_type": "text", "content": {"text": content}}, timeout=10)
-        print("飞书推送成功")
+        print(f"准备推送，内容长度: {len(content)}")
+        print(f"Webhook前20字符: {FEISHU_WEBHOOK[:20]}...")
+        payload = {"msg_type": "text", "content": {"text": content}}
+        print(f"Payload构造完成，msg_type: text")
+        response = requests.post(FEISHU_WEBHOOK, json=payload, timeout=10)
+        print(f"HTTP状态码: {response.status_code}")
+        print(f"响应内容: {response.text[:200]}")
+        if response.status_code == 200:
+            result = response.json()
+            code = result.get("code", result.get("StatusCode", -1))
+            msg = result.get("msg", result.get("StatusMessage", ""))
+            if code == 0:
+                print(f"\u2705\u98DE\u4E66\u63A8\u9001\u6210\u529F!")
+                return True
+            else:
+                print(f"\u274C\u98DE\u4E66\u63A8\u9001\u5931\u8D25: code={code}, msg={msg}")
+                return False
+        else:
+            print(f"\u274C HTTP\u9519\u8BEF: {response.status_code}")
+            return False
     except Exception as e:
-        print(f"飞书推送失败: {e}")
+        print(f"\u274C\u98DE\u4E66\u63A8\u9001\u5F02\u5E38: {e}")
+        return False
 
 def main():
     now = datetime.datetime.now()
@@ -224,22 +253,30 @@ def main():
         weekday = now.weekday()
         if weekday >= 5:
             print("周末非交易时段，退出")
-            exit()
+            return
         hour, minute = now.hour, now.minute
         if (hour < 9 or (hour == 9 and minute < 15)) or (hour > 15) or (hour == 11 and minute > 30) or (hour == 12):
             print("非交易时段，退出")
-            exit()
+            return
     else:
         print("测试模式：跳过交易时段检查")
     
+    hour, minute = now.hour, now.minute
     is_intraday = (hour in [10, 11, 13, 14]) and not (hour == 11 and minute == 30)
+    
     idx_data = get_index_eastmoney()
     if not idx_data:
         print("指数获取失败，终止任务")
         return
+    
     content = generate_push_content(is_intraday)
-    send_feishu(content)
-    print("推送任务完成")
+    print(f"内容生成完成，长度: {len(content)}")
+    
+    success = send_feishu(content)
+    if success:
+        print("=== \u63A8\u9001\u4EFB\u52A1\u5B8C\u6210 ===")
+    else:
+        print("=== \u63A8\u9001\u5931\u8D25 ===")
 
 if __name__ == "__main__":
     main()
