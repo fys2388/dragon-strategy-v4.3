@@ -40,7 +40,7 @@ jobs:
 
       - name: 运行策略推送脚本
         env:
-          FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
           IS_CLOUD: "true"
           TEST_MODE: ${{ inputs.test_mode || 'false' }}
         run: |

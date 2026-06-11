@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import datetime, requests, time, random, os, sys
 
-FEISHU_WEBHOOK = os.getenv("FEISHU_WEBHOOK", "")
+FEISHU_WEBHOOK = os.getenv("FEISHU_WEBHOOK_URL", "")
 IS_CLOUD = os.getenv("IS_CLOUD", "false").lower() == "true"
 TEST_MODE = os.getenv("TEST_MODE", "false").lower() == "true"
 
