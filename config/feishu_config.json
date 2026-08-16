@@ -1,9 +1,7 @@
 {
-  "version": "3.8",
-  "飞书配置": {
-    "webhook": "https://open.feishu.cn/open-apis/bot/v2/hook/8cb1308d-2c0e-4e16-9e7e-aafd4c970c51",
-    "enabled": true
-  },
+  "version": "1.0",
+  "webhook_url": "${FEISHU_WEBHOOK_URL}",
+  "enabled": true,
   "发送时间": {
     "预选池": "每日9:15前",
     "盘中预警": "9:30-14:30每5分钟",
@@ -12,10 +10,10 @@
     "月度报告": "每月28日20:00"
   },
   "消息格式": {
-    "预选池": "📊 【{date} 主板预选池 V3.8】\n\n{content}",
-    "盘中预警": "🚨 【涨停预警】\n\n{content}",
-    "复盘报告": "📋 【{date} 每日复盘 V3.8】\n\n{content}",
-    "周度报告": "📈 【{year}年第{week}周 周度学习 V3.8】\n\n{content}",
-    "月度报告": "📉 【{year}年{month}月 月度迭代 V3.8】\n\n{content}"
+    "预选池": "📊 【{date} 主板预选池 V1.0】\n\n{content}",
+    "盘中预警": "🚨 【共振预警】\n\n{content}",
+    "复盘报告": "📋 【{date} 每日复盘 V1.0】\n\n{content}",
+    "周度报告": "📈 【{year}年第{week}周 周度学习 V1.0】\n\n{content}",
+    "月度报告": "📉 【{year}年{month}月 月度迭代 V1.0】\n\n{content}"
   }
 }

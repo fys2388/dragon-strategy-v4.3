@@ -1,0 +1,15 @@
+{
+  "version": "4.3.1",
+  "last_updated": "2026-05-14",
+  "positions": [],
+  "history": [],
+  "stats": {
+    "total_trades": 0,
+    "winning_trades": 0,
+    "losing_trades": 0,
+    "total_pnl": 0,
+    "win_rate": 0,
+    "avg_profit": 0,
+    "avg_loss": 0
+  }
+}

@@ -27,11 +27,11 @@ class FeishuSender:
                 'config', 'feishu_config.json'
             )
         
-        with open(config_path, 'r', encoding='utf-8') as f:
-            self.config = json.load(f)
-        
-        self.webhook = self.config['飞书配置']['webhook']
-        self.enabled = self.config['飞书配置'].get('enabled', True)
+        from utils.config_loader import load_feishu_config
+        cfg = load_feishu_config(config_path)
+        self.webhook = cfg['webhook_url']
+        self.enabled = cfg['enabled']
+        self.config = cfg['raw']
     
     def send_text(self, message):
         """发送纯文本消息"""

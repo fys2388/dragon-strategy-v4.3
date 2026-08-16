@@ -8,6 +8,7 @@ __pycache__/
 venv/
 .pytest_cache/
 data/signal_cache.json
-portfolio_data.json
+data/portfolio_data.json
+logs/
 reports/output/*.json
 _strategy_review/

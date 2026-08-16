@@ -14,24 +14,23 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from strategies.macd_resonance.scanner import Scanner, build_message  # noqa: E402
+from strategies.macd_resonance.trading_calendar import is_trading_time, now_bjt  # noqa: E402
 
 
-def is_trading_time(now: datetime) -> bool:
-    """交易时段判断（周一至周五 9:15-15:00，跳过 11:30-13:00）。"""
+def should_run(now: datetime) -> bool:
+    """运行窗口：盘前 9:15-9:30 + 交易时段 9:30-11:30/13:00-15:00。"""
     if now.weekday() >= 5:
         return False
     hm = now.hour * 100 + now.minute
-    if hm < 915 or hm > 1500:
-        return False
-    if 1130 <= hm <= 1259:
-        return False
-    return True
+    if 915 <= hm < 930:  # 盘前窗口（含 9:15 盘前推送）
+        return True
+    return is_trading_time(now)
 
 
 def main():
-    now = datetime.now()
+    now = now_bjt()
     test_mode = os.environ.get("TEST_MODE", "").lower() == "true"
-    if not test_mode and not is_trading_time(now):
+    if not test_mode and not should_run(now):
         print(f"📌 非交易时段 {now.strftime('%Y-%m-%d %H:%M')}，退出")
         return
 

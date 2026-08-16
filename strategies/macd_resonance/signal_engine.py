@@ -44,6 +44,7 @@ class SignalResult:
     dif_15m: Optional[float] = None
     timestamp: str = field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     resonance_levels: List[str] = field(default_factory=list)
+    tf_status: Dict[str, bool] = field(default_factory=dict)
 
 
 class SignalEngine:
@@ -84,6 +85,23 @@ class SignalEngine:
         if s is None or len(s) == 0 or pd.isna(s.iloc[-1]):
             return None
         return float(s.iloc[-1])
+
+    def _tf_status(self, code: str) -> Dict[str, bool]:
+        """收集四周期信号状态（用于日志诊断）。"""
+        status = {}
+        df_d, dif_d, _, _ = self._tf_macd(code, "daily", 120)
+        dif_d_last = self._last(dif_d)
+        status["daily_above_zero"] = bool(not df_d.empty and dif_d_last is not None and dif_d_last > -ZERO_AXIS_EPS)
+
+        df_60, dif_60, dea_60, _ = self._tf_macd(code, "60m", 200)
+        status["tf60_golden"] = bool(not df_60.empty and is_golden_cross(dif_60, dea_60))
+
+        df_30, dif_30, dea_30, _ = self._tf_macd(code, "30m", 200)
+        status["tf30_golden"] = bool(not df_30.empty and is_golden_cross(dif_30, dea_30))
+
+        df_15, dif_15, _, _ = self._tf_macd(code, "15m", 200)
+        status["tf15_cross_zero"] = bool(not df_15.empty and cross_above_zero(dif_15))
+        return status
 
     # ----------------------------------------------------------
     # 入场信号
@@ -240,23 +258,27 @@ class SignalEngine:
             name = quotes.get(code, {}).get("name", code)
 
         position = self._position_for(code)
+        tf_status = self._tf_status(code)
 
         # 1. 持仓中优先检查离场
         if position:
             exit_sig = self.check_long_exit(code, name, price, position)
             if exit_sig:
+                exit_sig.tf_status = tf_status
                 return exit_sig
 
         # 2. 入场
         entry_sig = self.check_long_entry(code, name, price)
         if entry_sig:
+            entry_sig.tf_status = tf_status
             return entry_sig
 
         # 3. 空头规避
         if self.check_avoid(code):
             return SignalResult(code=code, name=name, signal_type=SignalType.AVOID,
-                                reason="空头规避：日线DIF零轴下方/60min死叉", price=round(price, 2))
+                                reason="空头规避：日线DIF零轴下方/60min死叉", price=round(price, 2),
+                                tf_status=tf_status)
 
         # 4. 持有/无信号
         return SignalResult(code=code, name=name, signal_type=SignalType.HOLD,
-                            reason="无共振信号", price=round(price, 2))
+                            reason="无共振信号", price=round(price, 2), tf_status=tf_status)

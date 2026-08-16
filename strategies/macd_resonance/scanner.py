@@ -3,14 +3,17 @@
 
 流程：大盘门控 → 标的池初筛 → 硬过滤 → 多周期信号分析 → 去重冷却 → 输出。
 并发控制：ThreadPoolExecutor(max_workers=8) + 单只 0.3s 间隔。
+日志：logs/scanner_YYYYMMDD.log + 控制台双输出。
 """
 from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import threading
 import time
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Dict, List, Optional
@@ -19,9 +22,38 @@ from . import data_source as ds
 from .config import RISK, SIGNAL
 from .filters import pass_hard_filters
 from .market_gate import get_market_score
+from .portfolio_manager import PortfolioManager
 from .signal_engine import SignalEngine, SignalType
 
 LOCK = threading.Lock()
+
+# ============================================================
+# 日志
+# ============================================================
+LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "logs")
+HISTORY_FILE = os.path.join(os.path.dirname(LOG_DIR), "data", "strategy_history.jsonl")
+
+
+def setup_logger() -> logging.Logger:
+    logger = logging.getLogger("scanner")
+    logger.setLevel(logging.INFO)
+    logger.handlers.clear()
+    fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        fh = logging.FileHandler(os.path.join(LOG_DIR, f"scanner_{datetime.now().strftime('%Y%m%d')}.log"),
+                                 encoding="utf-8")
+        fh.setFormatter(fmt)
+        logger.addHandler(fh)
+    except Exception:
+        pass
+    sh = logging.StreamHandler()
+    sh.setFormatter(fmt)
+    logger.addHandler(sh)
+    return logger
+
+
+LOG = setup_logger()
 
 
 class Scanner:
@@ -64,6 +96,34 @@ class Scanner:
         self._save_cache()
 
     # ----------------------------------------------------------
+    # 策略历史记录（供复盘/看板使用）
+    # ----------------------------------------------------------
+    def _append_history(self, result: Dict):
+        """将一次扫描结果追加到 data/strategy_history.jsonl。"""
+        record = {
+            "ts": result.get("scan_time") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "market_score": result.get("market_score", 0.0),
+            "can_open": result.get("can_open", False),
+            "summary": result.get("summary", ""),
+            "entries": [
+                {"code": e.get("code"), "name": e.get("name"),
+                 "price": e.get("price"), "score": e.get("score")}
+                for e in result.get("entries", [])
+            ],
+            "exit_signals": [
+                {"code": s.get("code"), "signal_type": s.get("signal_type"),
+                 "profit_pct": s.get("profit_pct"), "suggestion": s.get("suggestion")}
+                for s in result.get("exit_signals", [])
+            ],
+        }
+        try:
+            os.makedirs(os.path.dirname(HISTORY_FILE), exist_ok=True)
+            with open(HISTORY_FILE, "a", encoding="utf-8") as f:
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        except Exception as e:
+            LOG.warning(f"策略历史记录写入失败: {e}")
+
+    # ----------------------------------------------------------
     # 快速初筛（价格/市值/名称，不拉K线）
     # ----------------------------------------------------------
     def _quick_filter(self, stock: dict) -> bool:
@@ -72,7 +132,7 @@ class Scanner:
             return False
         price = float(stock.get("price", 0) or 0)
         cap = float(stock.get("float_cap_yi", 0) or 0)
-        if price < 3.0 or price > 35.0:      # 略宽于硬过滤，交给硬过滤精确判断
+        if price < 3.0 or price > 35.0:
             return False
         if cap < 30 or cap > 600:
             return False
@@ -106,8 +166,7 @@ class Scanner:
         Returns:
             {
               scan_time, market_score, market_desc, can_open,
-              entries: [SignalResult...], avoids: [...], errors: [...],
-              summary: ...
+              entries, avoids, errors, summary, diagnosis,
             }
         """
         result = {
@@ -119,39 +178,61 @@ class Scanner:
             "avoids": 0,
             "errors": [],
             "summary": "",
+            "diagnosis": "",
+            "exit_signals": [],
         }
+
+        # 0. 持仓离场信号（无论门控是否通过都执行）
+        try:
+            pm = PortfolioManager()
+            exit_signals = pm.check_exit_signals()
+            if exit_signals:
+                result["exit_signals"] = [s.__dict__ for s in exit_signals]
+                LOG.info(f"持仓离场信号 {len(exit_signals)} 条："
+                         + "; ".join(f"{s.code} {s.signal_type}" for s in exit_signals))
+        except Exception as e:
+            LOG.warning(f"持仓离场检查异常: {e}")
 
         # 1. 大盘门控
         score, desc, can_open = get_market_score()
         result["market_score"] = score
         result["market_desc"] = desc
         result["can_open"] = can_open
+        LOG.info(f"大盘评分 {score:.1f}/7，门控{'通过' if can_open else '未通过'}")
         if not can_open:
             result["summary"] = f"大盘评分 {score:.1f} 分 < 4，仅允许平仓/空仓，禁止新开多。"
+            LOG.info(result["summary"])
+            self._append_history(result)
             return result
 
         # 2. 标的池 + 初筛
         all_stocks = ds.get_mainboard_stocks(limit=max_stocks)
         if not all_stocks:
             result["summary"] = "获取标的池失败"
+            LOG.warning(result["summary"])
+            self._append_history(result)
             return result
         candidates = [s for s in all_stocks if self._quick_filter(s)]
-        result["summary"] = f"初筛 {len(all_stocks)} → {len(candidates)} 只"
+        LOG.info(f"标的池 {len(all_stocks)} 只 → 初筛 {len(candidates)} 只")
 
         # 3. 硬过滤（并发补齐 20 日均额/振幅）
         with ThreadPoolExecutor(max_workers=8) as pool:
             enriched = list(pool.map(self._enrich_hard_metrics, candidates))
         passed = []
+        reject_reasons = Counter()
         for s in enriched:
             ok, reason = pass_hard_filters(s)
             if ok:
                 passed.append(s)
             else:
-                result["errors"].append(reason)  # 保留为日志
+                reject_reasons[reason] += 1
+        LOG.info(f"硬过滤通过 {len(passed)} 只，拒绝 {len(enriched) - len(passed)} 只")
+        top_rejects = [r for r, _ in reject_reasons.most_common(3)]
 
         # 4. 多周期信号分析（并发 + 0.3s 间隔限速）
         entries: List[Dict] = []
         avoid_count = 0
+        tf_stats = Counter()
         delay = threading.Event()
 
         def analyze(stock: dict):
@@ -163,13 +244,26 @@ class Scanner:
             for fut in as_completed(futs):
                 try:
                     sig = fut.result()
-                except Exception as e:  # 单只异常不影响整体
+                except Exception as e:
                     result["errors"].append(f"analyze error: {e}")
                     continue
+                if sig.tf_status:
+                    if sig.tf_status.get("daily_above_zero"):
+                        tf_stats["日线零轴上方"] += 1
+                    if sig.tf_status.get("tf60_golden"):
+                        tf_stats["60min金叉"] += 1
+                    if sig.tf_status.get("tf30_golden"):
+                        tf_stats["30min金叉"] += 1
+                    if sig.tf_status.get("tf15_cross_zero"):
+                        tf_stats["15min上穿零轴"] += 1
                 if sig.signal_type == SignalType.LONG_ENTRY:
                     entries.append(sig.__dict__)
                 elif sig.signal_type == SignalType.AVOID:
                     avoid_count += 1
+
+        tf_desc = " | ".join(f"{k}{v}只" for k, v in tf_stats.most_common())
+        LOG.info(f"周期信号统计：{tf_desc or '无'}")
+        LOG.info(f"共振信号 {len(entries)} 只，空头规避 {avoid_count} 只")
 
         # 5. 共振强度排序，取前 5
         entries.sort(key=lambda x: x.get("score", 0), reverse=True)
@@ -185,7 +279,13 @@ class Scanner:
 
         result["entries"] = final
         result["avoids"] = avoid_count
-        result["summary"] += f" → 硬过滤 {len(passed)} 只 → 共振信号 {len(entries)} 只 → 推荐 {len(final)} 只"
+        result["summary"] = f"初筛 {len(all_stocks)} → {len(candidates)} 只 → 硬过滤 {len(passed)} 只 → 共振信号 {len(entries)} 只 → 推荐 {len(final)} 只"
+        result["diagnosis"] = (
+            f"扫描{len(all_stocks)}只 → 过滤后{len(passed)}只 → 共振通过{len(entries)}只"
+            f" | 主要拒因：{'、'.join(top_rejects) if top_rejects else '无'}"
+        )
+        LOG.info(result["summary"])
+        self._append_history(result)
         return result
 
 
@@ -208,7 +308,6 @@ def build_message(result: Dict) -> str:
             lines.append(f"   共振级别：{levels} | 得分{e['score']}")
             lines.append(f"   理由：{e['reason']}")
             lines.append("")
-        # 1 万本金仓位建议
         single = RISK["total_capital"] * RISK["position_pct"]
         lines.append(f"💼 仓位建议（本金{RISK['total_capital']:.0f}元）")
         lines.append(f"  单票≤30%（{single:.0f}元），最多{RISK['max_positions']}只")
@@ -216,7 +315,21 @@ def build_message(result: Dict) -> str:
     else:
         lines.append("  当前无符合多周期共振的标的，继续观望")
     lines.append("")
+
+    # 持仓提醒（最高优先级区块）
+    if result.get("exit_signals"):
+        lines.append("【持仓提醒】")
+        icon = {"hard_stop": "🚨", "zero_axis_break": "🔴", "tf60_divergence": "🟠",
+                "take_profit_2": "💰", "take_profit_1": "💎"}
+        for s in result["exit_signals"]:
+            lines.append(f"{icon.get(s['signal_type'], '⚠️')} {s['name']}({s['code']})")
+            lines.append(f"   现价{s['current_price']} | 盈亏{s['profit_pct']:+.1f}%")
+            lines.append(f"   {s['reason']} → {s['suggestion']}")
+        lines.append("")
+
     lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    if result.get("diagnosis"):
+        lines.append(f"📈 诊断：{result['diagnosis']}")
     lines.append("⚠️ 仅为策略信号，不构成投资建议，最终操作请自行判断")
     return "\n".join(lines)
 
@@ -233,7 +346,6 @@ def main():
     print(msg)
     print("\n[SUMMARY]", result["summary"])
 
-    # 推送模式：调用飞书
     if args.push:
         webhook = os.environ.get("FEISHU_WEBHOOK_URL", "")
         if webhook:

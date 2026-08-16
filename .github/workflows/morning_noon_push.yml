@@ -1,31 +1,38 @@
+# -*- coding: utf-8 -*-
+# 盘前 + 午盘推送。
+# cron 时间表（GitHub Actions 使用 UTC，北京时间 = UTC+8）：
+# - 盘前 09:15 BJT → cron '15 1 * * 1-5'
+# - 午盘 11:35 BJT → cron '35 3 * * 1-5'
 name: Morning & Noon Report Push
+
 on:
   schedule:
-    # 北京时间 9:15 = UTC 1:15，周一到周五
     - cron: '15 1 * * 1-5'
-    # 北京时间 12:00 = UTC 4:00，周一到周五
-    - cron: '0 4 * * 1-5'
+    - cron: '35 3 * * 1-5'
   workflow_dispatch:
 
 jobs:
   push_report:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install requests --quiet
+        run: |
+          pip install requests pandas numpy
 
       - name: Run Morning/Noon Push
         run: python3 scripts/morning_noon_push.py
+        env:
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
 
       - name: Done
         run: echo "Report pushed at $(date)"

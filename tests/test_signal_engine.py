@@ -80,6 +80,23 @@ class TestSignalEngine(unittest.TestCase):
 
 
 class TestScannerGate(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        from strategies.macd_resonance import scanner as scanner_mod
+        self._old = scanner_mod.HISTORY_FILE
+        self._tmp = tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False, encoding="utf-8")
+        self._tmp.close()
+        scanner_mod.HISTORY_FILE = self._tmp.name
+
+    def tearDown(self):
+        import os
+        from strategies.macd_resonance import scanner as scanner_mod
+        scanner_mod.HISTORY_FILE = self._old
+        try:
+            os.unlink(self._tmp.name)
+        except OSError:
+            pass
+
     @mock.patch("strategies.macd_resonance.scanner.get_market_score",
                 return_value=(2.0, "评分不足", False))
     def test_empty_when_market_below_threshold(self, m):
