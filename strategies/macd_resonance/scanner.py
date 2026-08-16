@@ -23,6 +23,7 @@ from .config import RISK, SIGNAL
 from .filters import pass_hard_filters
 from .market_gate import get_market_score
 from .portfolio_manager import PortfolioManager
+from .trading_calendar import BJT, now_bjt
 from .signal_engine import SignalEngine, SignalType
 
 LOCK = threading.Lock()
@@ -34,11 +35,24 @@ LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.a
 HISTORY_FILE = os.path.join(os.path.dirname(LOG_DIR), "data", "strategy_history.jsonl")
 
 
+class _BJTFormatter(logging.Formatter):
+    """日志时间使用北京时间显示。"""
+
+    def formatTime(self, record, datefmt=None):
+        dt = now_bjt()
+        return dt.strftime(datefmt or "%Y-%m-%d %H:%M:%S")
+
+
+def _now_naive() -> datetime:
+    """当前北京时间（naive，用于缓存/冷却期比较）。"""
+    return now_bjt().replace(tzinfo=None)
+
+
 def setup_logger() -> logging.Logger:
     logger = logging.getLogger("scanner")
     logger.setLevel(logging.INFO)
     logger.handlers.clear()
-    fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+    fmt = _BJTFormatter("%(asctime)s %(levelname)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
     try:
         os.makedirs(LOG_DIR, exist_ok=True)
         fh = logging.FileHandler(os.path.join(LOG_DIR, f"scanner_{datetime.now().strftime('%Y%m%d')}.log"),
@@ -88,11 +102,11 @@ class Scanner:
             last_ts = datetime.strptime(last, "%Y-%m-%d %H:%M:%S")
         except ValueError:
             return False
-        hours = (datetime.now() - last_ts).total_seconds() / 3600
+        hours = (_now_naive() - last_ts).total_seconds() / 3600
         return hours < SIGNAL["cooldown_hours"]
 
     def _mark_pushed(self, code: str):
-        self.cache.setdefault("pushed", {})[code] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.cache.setdefault("pushed", {})[code] = _now_naive().strftime("%Y-%m-%d %H:%M:%S")
         self._save_cache()
 
     # ----------------------------------------------------------
@@ -170,7 +184,7 @@ class Scanner:
             }
         """
         result = {
-            "scan_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "scan_time": now_bjt().strftime("%Y-%m-%d %H:%M:%S"),
             "market_score": 0.0,
             "market_desc": "",
             "can_open": False,
@@ -291,7 +305,7 @@ class Scanner:
 
 def build_message(result: Dict) -> str:
     """将扫描结果格式化为飞书消息。"""
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    now = now_bjt().strftime("%Y-%m-%d %H:%M")
     lines = [f"📊 MACD多周期共振策略 盘中实时 {now}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"]
 
     lines.append("【大盘环境】")

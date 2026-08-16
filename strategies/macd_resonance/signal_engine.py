@@ -18,6 +18,8 @@ import pandas as pd
 
 from . import data_source as ds
 from .config import RISK, SIGNAL, TIMEFRAME_ORDER, ZERO_AXIS_EPS
+from .trading_calendar import now_bjt
+
 from .macd_indicator import (above_zero_axis, below_zero_axis, calc_macd,
                              check_bullish_divergence, cross_above_zero,
                              is_death_cross, is_golden_cross, red_bar_expanding)
@@ -42,7 +44,7 @@ class SignalResult:
     dif_60m: Optional[float] = None
     dif_30m: Optional[float] = None
     dif_15m: Optional[float] = None
-    timestamp: str = field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    timestamp: str = field(default_factory=lambda: now_bjt().strftime("%Y-%m-%d %H:%M:%S"))
     resonance_levels: List[str] = field(default_factory=list)
     tf_status: Dict[str, bool] = field(default_factory=dict)
 

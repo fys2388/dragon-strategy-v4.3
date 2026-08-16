@@ -58,4 +58,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: run-log-${{ github.run_id }}
-          path: stock_push.log
+          path: logs/
+          if-no-files-found: warn
