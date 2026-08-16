@@ -1,27 +1,34 @@
 # -*- coding: utf-8 -*-
 # 收盘复盘推送：北京时间 18:00 = UTC 10:00，周一到周五。
-# name: Evening Review Push
-# on:
-# schedule:
-# - cron: '0 10 * * 1-5'
-# workflow_dispatch:
-# jobs:
-# push_review:
-# runs-on: ubuntu-latest
-# timeout-minutes: 10
-# steps:
-# - name: Checkout
-# uses: actions/checkout@v4
-# - name: Setup Python
-# uses: actions/setup-python@v5
-# with:
-# python-version: '3.11'
-# - name: Install dependencies
-# run: |
-# pip install requests pandas numpy
-# - name: Run Review Push
-# run: python3 scripts/daily_review_push.py
-# env:
-# FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
-# - name: Done
-# run: echo "Evening review pushed at $(date)"
+name: Evening Review Push
+
+on:
+  schedule:
+    - cron: '0 10 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  push_review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install requests pandas numpy
+
+      - name: Run Review Push
+        run: python3 scripts/daily_review_push.py
+        env:
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+
+      - name: Done
+        run: echo "Evening review pushed at $(date)"
