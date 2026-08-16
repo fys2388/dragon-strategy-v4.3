@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+*.log
+*.lock
+.env
+.venv/
+venv/
+.pytest_cache/
+data/signal_cache.json
+portfolio_data.json
+reports/output/*.json
+_strategy_review/

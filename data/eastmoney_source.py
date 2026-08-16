@@ -16,10 +16,10 @@ class EastMoneyDataSource:
     """东方财富数据源"""
     
     def __init__(self):
-        self.base_url = "http://push2.eastmoney.com/api/qt"
+        self.base_url = "https://push2.eastmoney.com/api/qt"
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Referer': 'http://quote.eastmoney.com/'
+            'Referer': 'https://quote.eastmoney.com/'
         }
     
     def _code_to_market(self, code: str) -> str:
@@ -108,7 +108,7 @@ class EastMoneyDataSource:
             date = datetime.now().strftime('%Y-%m-%d')
         
         # 东方财富涨停板数据接口
-        url = "http://push2.eastmoney.com/api/qt/clist/get"
+        url = "https://push2.eastmoney.com/api/qt/clist/get"
         
         params = {
             'pn': 1,
@@ -202,7 +202,7 @@ class EastMoneyDataSource:
             龙头股列表
         """
         # 东方财富板块数据
-        url = "http://push2.eastmoney.com/api/qt/clist/get"
+        url = "https://push2.eastmoney.com/api/qt/clist/get"
         
         params = {
             'pn': 1,
@@ -285,12 +285,12 @@ class EastMoneyDataSource:
     def get_market_sentiment(self) -> Dict:
         """获取市场情绪指标"""
         # 涨跌家数
-        url = "http://push2.eastmoney.com/api/qt/stock/get"
+        url = "https://push2.eastmoney.com/api/qt/stock/get"
         
         try:
             # 获取涨跌统计
-            up_url = "http://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=1&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=m:0+t:6,m:0+t:13,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048&fields=f2,f3"
-            down_url = "http://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=1&po=0&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=m:0+t:6,m:0+t:13,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048&fields=f2,f3"
+            up_url = "https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=1&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=m:0+t:6,m:0+t:13,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048&fields=f2,f3"
+            down_url = "https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=1&po=0&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=m:0+t:6,m:0+t:13,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048&fields=f2,f3"
             
             # 简化：使用涨停数据中的统计
             limit_up = self.get_limit_up_stocks()
@@ -326,7 +326,7 @@ class EastMoneyDataSource:
             date = datetime.now().strftime('%Y-%m-%d')
 
         # 东方财富龙虎榜接口
-        url = "http://push2.eastmoney.com/api/qt/clist/get"
+        url = "https://push2.eastmoney.com/api/qt/clist/get"
 
         params = {
             'pn': 1,

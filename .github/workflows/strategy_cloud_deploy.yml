@@ -1,4 +1,4 @@
-name: Stock Strategy Cloud Deploy
+name: V1.0 MACD多周期共振策略云推送
 run-name: "云端策略推送 @ ${{ github.actor }}"
 
 on:
@@ -17,6 +17,7 @@ on:
 jobs:
   run-strategy-push:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: 拉取仓库代码
         uses: actions/checkout@v4
@@ -25,21 +26,19 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
 
       - name: 安装依赖
         run: |
           python -m pip install --upgrade pip
-          pip install requests pytz
+          pip install requests pandas numpy
 
-      - name: 运行策略推送脚本
+      - name: 运行MACD多周期共振策略推送
         env:
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
           IS_CLOUD: "true"
           TEST_MODE: ${{ inputs.test_mode || 'false' }}
         run: |
           python scripts/v43_push.py
-        continue-on-error: false
 
       - name: 上传运行日志
         if: always()

@@ -39,7 +39,7 @@ class V4DataSource:
         secids = ','.join([self._code_to_market(code) for code in codes])
         fields = 'f43,f44,f45,f46,f47,f48,f57,f58,f60,f169,f170,f171'
         
-        url = f"http://push2.eastmoney.com/api/qt/stock/get/?secid={secids}&fields={fields}"
+        url = f"https://push2.eastmoney.com/api/qt/stock/get/?secid={secids}&fields={fields}"
         
         try:
             response = requests.get(url, headers=self.headers, timeout=10)
@@ -72,8 +72,8 @@ class V4DataSource:
             'volume': d.get('f48', 0),
             'amount': float(d.get('f60', 0)) / 100 if d.get('f60') else 0,
             'turnover': float(d.get('f168', 0)) / 100 if d.get('f168') else 0,  # 换手率
-            'float_cap': float(d.get('f169', 0)) / 10000 if d.get('f169') else 0,  # 流通市值(万)
-            'total_cap': float(d.get('f171', 0)) / 10000 if d.get('f171') else 0,  # 总市值(万)
+            'float_cap': float(d.get('f169', 0)) / 100000000 if d.get('f169') else 0,  # 流通市值(元->亿)
+            'total_cap': float(d.get('f171', 0)) / 100000000 if d.get('f171') else 0,  # 总市值(元->亿)
         }
     
     # ==================== 历史K线数据 ====================
@@ -87,7 +87,7 @@ class V4DataSource:
         secid = f"{market}.{code}"
         
         # 东方财富历史K线接口
-        url = "http://push2his.eastmoney.com/api/qt/stock/kline/get"
+        url = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
         params = {
             'secid': secid,
             'fields1': 'f1,f2,f3,f4,f5,f6',
@@ -130,7 +130,7 @@ class V4DataSource:
         market = '1' if code.startswith('6') else '0'
         secid = f"{market}.{code}"
         
-        url = "http://push2his.eastmoney.com/api/qt/stock/kline/get"
+        url = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
         params = {
             'secid': secid,
             'fields1': 'f1,f2,f3,f4,f5,f6',
@@ -169,7 +169,7 @@ class V4DataSource:
         market = '1' if code.startswith('6') else '0'
         secid = f"{market}.{code}"
         
-        url = "http://push2his.eastmoney.com/api/qt/stock/kline/get"
+        url = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
         params = {
             'secid': secid,
             'fields1': 'f1,f2,f3,f4,f5,f6',
@@ -192,7 +192,7 @@ class V4DataSource:
     
     def get_market_index(self) -> Dict:
         """获取主要指数"""
-        url = "http://push2.eastmoney.com/api/qt/stock/get"
+        url = "https://push2.eastmoney.com/api/qt/stock/get"
         secids = '1.000001,0.399001,0.399006,1.000300,1.000016'
         fields = 'f1,f2,f3,f4,f5,f6,f7,f8,f12,f14'
         
@@ -253,7 +253,7 @@ class V4DataSource:
     
     def get_limit_up_stocks(self, date: str = None) -> Dict:
         """获取涨停股票"""
-        url = "http://push2.eastmoney.com/api/qt/clist/get"
+        url = "https://push2.eastmoney.com/api/qt/clist/get"
         params = {
             'pn': 1, 'pz': 5000, 'po': 1, 'np': 1,
             'ut': 'bd1d9ddb04089700cf9c27f6f7426281',
@@ -311,7 +311,7 @@ class V4DataSource:
     
     def get_limit_down_stocks(self, date: str = None) -> Dict:
         """获取跌停股票"""
-        url = "http://push2.eastmoney.com/api/qt/clist/get"
+        url = "https://push2.eastmoney.com/api/qt/clist/get"
         params = {
             'pn': 1, 'pz': 1000, 'po': 0, 'np': 1,
             'ut': 'bd1d9ddb04089700cf9c27f6f7426281',
@@ -341,7 +341,7 @@ class V4DataSource:
     
     def get_sector_limit_up(self, sector_code: str) -> Dict:
         """获取指定板块的涨停股数量"""
-        url = "http://push2.eastmoney.com/api/qt/clist/get"
+        url = "https://push2.eastmoney.com/api/qt/clist/get"
         
         # 根据板块代码获取涨停
         fs = f'b:{sector_code}+f:!50'  # 板块内所有股票
@@ -377,7 +377,7 @@ class V4DataSource:
         market = '1' if code.startswith('6') else '0'
         secid = f"{market}.{code}"
         
-        url = "http://push2.eastmoney.com/api/qt/stock/get"
+        url = "https://push2.eastmoney.com/api/qt/stock/get"
         fields = 'f1,f2,f3,f4,f5,f6,f7,f8,f12,f14,f15,f16,f17,f18,f19,f20,f21,f22,f23,f24,f25,f26,f27,f28'
         
         try:
@@ -400,7 +400,7 @@ class V4DataSource:
         stocks = []
         
         # 上海主板
-        url = "http://push2.eastmoney.com/api/qt/clist/get"
+        url = "https://push2.eastmoney.com/api/qt/clist/get"
         
         # 沪市主板 60开头
         params_sh = {
@@ -452,7 +452,7 @@ class V4DataSource:
             change_pct = 0
         
         try:
-            float_cap = float(item.get('f169', 0)) / 10000  # 流通市值(万->亿)
+            float_cap = float(item.get('f169', 0)) / 100000000  # 流通市值(元->亿)
         except:
             float_cap = 0
         

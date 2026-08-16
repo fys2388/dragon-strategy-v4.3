@@ -1,4 +1,4 @@
-name: V4.4.0 策略推送服务
+name: V1.0 MACD多周期共振策略推送
 
 on:
   schedule:
@@ -21,21 +21,21 @@ jobs:
   push-report:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    
+
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4.2.2
+        uses: actions/checkout@v4
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.11'
 
       - name: Install dependencies
         run: |
-          pip install requests pytz
+          pip install requests pandas numpy
 
-      - name: Run strategy push
+      - name: Run MACD resonance push
         run: python scripts/v43_push.py
         env:
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}

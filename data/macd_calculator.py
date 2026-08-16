@@ -28,7 +28,7 @@ class MACDCalculator:
         self.signal = signal
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Referer': 'http://quote.eastmoney.com/'
+            'Referer': 'https://quote.eastmoney.com/'
         }
     
     def _code_to_market(self, code: str) -> str:
@@ -52,7 +52,7 @@ class MACDCalculator:
         secid = self._code_to_market(code)
         
         # 东方财富K线接口
-        url = f"http://push2his.eastmoney.com/api/qt/stock/kline/get"
+        url = f"https://push2his.eastmoney.com/api/qt/stock/kline/get"
         params = {
             'secid': secid,
             'fields1': 'f1,f2,f3,f4,f5,f6',
