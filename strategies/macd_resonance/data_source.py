@@ -27,11 +27,12 @@ _HEADERS = {
 }
 
 
-def _request_get(url: str, params: Dict) -> Optional[dict]:
+def _request_get(url: str, params: Dict, timeout: Optional[float] = None) -> Optional[dict]:
     """带重试的 GET 请求，失败返回 None。"""
+    timeout = timeout if timeout is not None else _TIMEOUT
     for attempt in range(_RETRY + 1):
         try:
-            resp = requests.get(url, params=params, headers=_HEADERS, timeout=_TIMEOUT)
+            resp = requests.get(url, params=params, headers=_HEADERS, timeout=timeout)
             if resp.status_code == 200:
                 return resp.json()
         except Exception:
@@ -210,6 +211,8 @@ def get_market_indices() -> Dict[str, Dict]:
 # 标的池分页参数：小页翻页，规避东财对大 pz 的截断/限流（GitHub 海外 IP 尤甚）
 POOL_PAGE_SIZE = 200
 POOL_MAX_PAGES = 20  # 200 x 20 = 4000，覆盖全部沪深主板
+POOL_FETCH_TIMEOUT = 30  # 标的池抓取总时间预算（秒），超时即返回已获取部分
+POOL_PAGE_TIMEOUT = 4    # 单页请求超时（秒），东财对海外IP不稳定，快速失败避免耗尽预算
 
 
 def get_mainboard_stocks(limit: int = 6000) -> List[Dict]:
@@ -225,15 +228,20 @@ def get_mainboard_stocks(limit: int = 6000) -> List[Dict]:
     stocks: List[Dict] = []
     seen: set = set()
     max_pages = POOL_MAX_PAGES  # limit 仅作提前停止条件，不缩减翻页上限
+    deadline = time.time() + POOL_FETCH_TIMEOUT
     for pn in range(1, max_pages + 1):
+        if time.time() > deadline:
+            break  # 时间预算耗尽，返回已获取部分
         params = {
             "pn": pn, "pz": POOL_PAGE_SIZE, "po": 1, "np": 1, "ut": _UT,
             "fltt": 2, "invt": 2, "fid": "f6",
             "fs": "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23",
             "fields": "f2,f6,f12,f14,f20",
         }
-        data = _request_get(f"{_BASE}/api/qt/clist/get", params)
+        data = _request_get(f"{_BASE}/api/qt/clist/get", params, timeout=POOL_PAGE_TIMEOUT)
         if not data or not data.get("data"):
+            if pn == 1:
+                break  # 首页即失败：数据源不可达，不再浪费预算
             continue  # 单页失败，跳过继续
         diff = data["data"].get("diff") or []
         if isinstance(diff, dict):
