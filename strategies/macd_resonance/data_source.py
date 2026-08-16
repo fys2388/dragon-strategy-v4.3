@@ -207,30 +207,46 @@ def get_market_indices() -> Dict[str, Dict]:
     return indices
 
 
+# 标的池分页参数：小页翻页，规避东财对大 pz 的截断/限流（GitHub 海外 IP 尤甚）
+POOL_PAGE_SIZE = 200
+POOL_MAX_PAGES = 20  # 200 x 20 = 4000，覆盖全部沪深主板
+
+
 def get_mainboard_stocks(limit: int = 6000) -> List[Dict]:
-    """沪深主板股票列表（60/00 开头）。
+    """沪深主板股票列表（60/00 开头），按成交额降序翻页获取。
+
+    稳健性：
+    - 单页失败不中断整体（记录跳过，继续下一页）
+    - 按 code 去重，防止分页重叠
+    - 遇到空页（数据末尾）提前结束
 
     返回字段：code / name / price / float_cap_yi / amount_yi
     """
     stocks: List[Dict] = []
-    pn = 1
-    while pn <= 3 and len(stocks) < limit:
+    seen: set = set()
+    max_pages = POOL_MAX_PAGES  # limit 仅作提前停止条件，不缩减翻页上限
+    for pn in range(1, max_pages + 1):
         params = {
-            "pn": pn, "pz": 5000, "po": 1, "np": 1, "ut": _UT,
+            "pn": pn, "pz": POOL_PAGE_SIZE, "po": 1, "np": 1, "ut": _UT,
             "fltt": 2, "invt": 2, "fid": "f6",
             "fs": "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23",
             "fields": "f2,f6,f12,f14,f20",
         }
         data = _request_get(f"{_BASE}/api/qt/clist/get", params)
-        if not data or not data.get("data") or not data["data"].get("diff"):
-            break
-        diff = data["data"]["diff"]
+        if not data or not data.get("data"):
+            continue  # 单页失败，跳过继续
+        diff = data["data"].get("diff") or []
         if isinstance(diff, dict):
             diff = list(diff.values())
+        if not diff:
+            break  # 数据末尾
         for item in diff:
             code = str(item.get("f12", ""))
             if not (code.startswith("60") or code.startswith("00")):
                 continue
+            if code in seen:
+                continue
+            seen.add(code)
             stocks.append({
                 "code": code,
                 "name": str(item.get("f14", "")),
@@ -238,8 +254,9 @@ def get_mainboard_stocks(limit: int = 6000) -> List[Dict]:
                 "float_cap_yi": get_float_market_cap_yi(item),
                 "amount_yi": get_amount_yi(item),
             })
-        pn += 1
         time.sleep(0.2)
+        if len(stocks) >= limit:
+            break
     return stocks[:limit]
 
 
