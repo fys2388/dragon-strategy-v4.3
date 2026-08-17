@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import Tuple
 
 from . import data_source as ds
+from .data_source import get_limit_up_down_count  # noqa: F401  (re-export, 供外部验证命令导入)
 from .config import MARKET_GATE
 
 
@@ -40,7 +41,7 @@ def get_market_score() -> Tuple[float, str, bool]:
         details.append(f"✗ 两市成交额{total_amount:.0f}亿<8000亿")
 
     # 3/4/5. 涨停/跌停家数
-    up, down = ds.count_limit_up_down()
+    up, down = get_limit_up_down_count()
     if up >= 30:
         score += 1
         details.append(f"✓ 涨停{up}家≥30(+1)")

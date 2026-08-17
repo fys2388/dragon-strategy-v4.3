@@ -194,7 +194,15 @@ class Scanner:
             "summary": "",
             "diagnosis": "",
             "exit_signals": [],
+            "scan_elapsed": 0.0,
+            "limit_up": 0,
+            "limit_down": 0,
+            "scanned_count": 0,
+            "passed_count": 0,
+            "resonance_count": 0,
+            "recommend_count": 0,
         }
+        t0 = time.time()
 
         # 0. 持仓离场信号（无论门控是否通过都执行）
         try:
@@ -207,6 +215,13 @@ class Scanner:
         except Exception as e:
             LOG.warning(f"持仓离场检查异常: {e}")
 
+        # 0.5 涨跌停家数（诊断用，异常兜底为 0）
+        try:
+            result["limit_up"], result["limit_down"] = ds.get_limit_up_down_count()
+            LOG.info(f"涨跌停家数：涨停{result['limit_up']}家 / 跌停{result['limit_down']}家")
+        except Exception as e:
+            LOG.warning(f"涨跌停统计异常: {e}")
+
         # 1. 大盘门控
         score, desc, can_open = get_market_score()
         result["market_score"] = score
@@ -216,6 +231,7 @@ class Scanner:
         if not can_open:
             result["summary"] = f"大盘评分 {score:.1f} 分 < 4，仅允许平仓/空仓，禁止新开多。"
             LOG.info(result["summary"])
+            result["scan_elapsed"] = round(time.time() - t0, 1)
             self._append_history(result)
             return result
 
@@ -224,6 +240,7 @@ class Scanner:
         if not all_stocks:
             result["summary"] = "获取标的池失败"
             LOG.warning(result["summary"])
+            result["scan_elapsed"] = round(time.time() - t0, 1)
             self._append_history(result)
             return result
         candidates = [s for s in all_stocks if self._quick_filter(s)]
@@ -293,12 +310,17 @@ class Scanner:
 
         result["entries"] = final
         result["avoids"] = avoid_count
+        result["scanned_count"] = len(all_stocks)
+        result["passed_count"] = len(passed)
+        result["resonance_count"] = len(entries)
+        result["recommend_count"] = len(final)
         result["summary"] = f"初筛 {len(all_stocks)} → {len(candidates)} 只 → 硬过滤 {len(passed)} 只 → 共振信号 {len(entries)} 只 → 推荐 {len(final)} 只"
         result["diagnosis"] = (
             f"扫描{len(all_stocks)}只 → 过滤后{len(passed)}只 → 共振通过{len(entries)}只"
             f" | 主要拒因：{'、'.join(top_rejects) if top_rejects else '无'}"
         )
         LOG.info(result["summary"])
+        result["scan_elapsed"] = round(time.time() - t0, 1)
         self._append_history(result)
         return result
 
@@ -345,6 +367,10 @@ def build_message(result: Dict) -> str:
     if result.get("diagnosis"):
         lines.append(f"📈 诊断：{result['diagnosis']}")
     lines.append("⚠️ 仅为策略信号，不构成投资建议，最终操作请自行判断")
+    now_full = now_bjt().strftime("%Y-%m-%d %H:%M:%S")
+    lines.append(f"⏱ 触发时间：北京时间{now_full} | 扫描耗时{result.get('scan_elapsed', 0)}s | "
+                 f"涨停{result.get('limit_up', 0)}家/跌停{result.get('limit_down', 0)}家 | "
+                 f"过滤后{result.get('passed_count', 0)}只→共振通过{result.get('resonance_count', 0)}只")
     return "\n".join(lines)
 
 

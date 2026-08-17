@@ -268,30 +268,55 @@ def get_mainboard_stocks(limit: int = 6000) -> List[Dict]:
     return stocks[:limit]
 
 
-def count_limit_up_down() -> tuple[int, int]:
-    """主板涨停/跌停家数（涨幅≥9.8 视为涨停）。"""
+# 涨跌停判定阈值：主板 10%（ST 5% 不计入，天然被 9.9 过滤）
+LIMIT_UP_THRESHOLD = 9.9
+LIMIT_DOWN_THRESHOLD = -9.9
+
+
+def get_limit_up_down_count() -> tuple[int, int]:
+    """动态统计沪深A股涨停/跌停家数。
+
+    方法：调用东财沪深A股列表接口，遍历全部股票按 f3 涨幅统计：
+    - f3 ≥ 9.9 → 涨停（近似，ST 股 5% 涨停不计入）
+    - f3 ≤ -9.9 → 跌停
+    注意：东财 f3 单位为百分比（10.0 表示 10%），无需再除 100。
+
+    Returns:
+        (涨停家数, 跌停家数)；接口失败返回 (0, 0) 并打印错误日志，不崩溃。
+    """
     params = {
         "pn": 1, "pz": 6000, "po": 1, "np": 1, "ut": _UT,
         "fltt": 2, "invt": 2, "fid": "f3",
         "fs": "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23",
-        "fields": "f3",
+        "fields": "f12,f14,f3,f4,f5,f6,f15,f16,f17,f18",
     }
-    data = _request_get(f"{_BASE}/api/qt/clist/get", params)
-    up = down = 0
-    if data and data.get("data") and data["data"].get("diff"):
-        diff = data["data"]["diff"]
+    try:
+        data = _request_get(f"{_BASE}/api/qt/clist/get", params)
+        if not data or not data.get("data"):
+            print("[get_limit_up_down_count] 接口无数据，返回 (0, 0)")
+            return 0, 0
+        diff = data["data"].get("diff") or []
         if isinstance(diff, dict):
             diff = list(diff.values())
+        up = down = 0
         for item in diff:
             try:
                 chg = float(item.get("f3", 0) or 0)
             except (TypeError, ValueError):
                 continue
-            if chg >= 9.8:
+            if chg >= LIMIT_UP_THRESHOLD:
                 up += 1
-            elif chg <= -9.8:
+            elif chg <= LIMIT_DOWN_THRESHOLD:
                 down += 1
-    return up, down
+        return up, down
+    except Exception as e:
+        print(f"[get_limit_up_down_count] 异常: {e}，返回 (0, 0)")
+        return 0, 0
+
+
+def count_limit_up_down() -> tuple[int, int]:
+    """兼容旧接口：等价于 get_limit_up_down_count()。"""
+    return get_limit_up_down_count()
 
 
 def get_market_total_amount_yi() -> float:

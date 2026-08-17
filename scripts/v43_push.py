@@ -30,6 +30,9 @@ def should_run(now: datetime) -> bool:
 def main():
     now = now_bjt()
     test_mode = os.environ.get("TEST_MODE", "").lower() == "true"
+    print(f"[交易时段检查] 北京时间={now.strftime('%Y-%m-%d %H:%M:%S')} "
+          f"weekday={now.weekday()} is_trading={is_trading_time(now)} "
+          f"should_run={should_run(now)} test_mode={test_mode}")
     if not test_mode and not should_run(now):
         print(f"📌 非交易时段 {now.strftime('%Y-%m-%d %H:%M')}，退出")
         return
