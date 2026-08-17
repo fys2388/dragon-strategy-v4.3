@@ -63,6 +63,12 @@ class TestValidateMarketData(unittest.TestCase):
         self.assertEqual(res.chosen_source, "akshare")
         self.assertEqual(res.severity, "warning")
 
+    def test_backup_down_degraded(self):
+        res = validate_market_data(md(), None)
+        self.assertEqual(res.chosen_source, "eastmoney")
+        self.assertEqual(res.severity, "degraded")
+        self.assertTrue(any("备源" in a for a in res.anomalies))
+
     def test_both_down_fatal(self):
         res = validate_market_data(None, None)
         self.assertEqual(res.severity, "fatal")

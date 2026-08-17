@@ -90,17 +90,26 @@ def get_data_akshare() -> Optional[MarketData]:
         print("[data_validator] akshare 未安装，备源不可用")
         return None
     try:
-        # 指数实时（列：代码/名称/最新价/涨跌幅/成交额...）
-        idx = ak.stock_zh_index_spot()
-        sh_row = idx[idx["代码"].astype(str).str.startswith("000001")].head(1)
+        # 指数实时：优先东财版接口（akshare>=1.12），旧版接口名兼容
+        idx_fn = getattr(ak, "stock_zh_index_spot_em", None) or getattr(ak, "stock_zh_index_spot", None)
+        if idx_fn is None:
+            print("[data_validator] akshare 无指数接口")
+            return None
+        idx = idx_fn()
+        code_col = "代码" if "代码" in idx.columns else idx.columns[0]
+        sh_row = idx[idx[code_col].astype(str).str.startswith("000001")].head(1)
         if sh_row.empty:
             print("[data_validator] akshare 未取到沪指")
             return None
         index_price = float(sh_row.iloc[0].get("最新价", 0) or 0)
         index_change_pct = float(sh_row.iloc[0].get("涨跌幅", 0) or 0)
 
-        # 全A实时（列：代码/名称/最新价/涨跌幅...）
-        spot = ak.stock_zh_a_spot()
+        # 全A实时：优先东财版
+        spot_fn = getattr(ak, "stock_zh_a_spot_em", None) or getattr(ak, "stock_zh_a_spot", None)
+        if spot_fn is None:
+            print("[data_validator] akshare 无全A接口")
+            return None
+        spot = spot_fn()
         chg_col = "涨跌幅"
         if chg_col not in spot.columns:
             print("[data_validator] akshare 全A缺少涨跌幅列")
@@ -112,7 +121,7 @@ def get_data_akshare() -> Optional[MarketData]:
         # 两市成交额（亿）≈ 沪市 + 深市指数成交额
         volume_yi = 0.0
         for code in ("000001", "399001"):
-            r = idx[idx["代码"].astype(str).str.startswith(code)].head(1)
+            r = idx[idx[code_col].astype(str).str.startswith(code)].head(1)
             if not r.empty:
                 vol = float(r.iloc[0].get("成交额", 0) or 0)
                 volume_yi += vol / 100000000.0
@@ -169,7 +178,7 @@ def validate_market_data(primary: Optional[MarketData],
     if primary is None:
         return ValidationResult(False, ["主源(东财)不可用，切换备源"], "akshare", "warning")
     if backup is None:
-        return ValidationResult(True, ["备源(AkShare)不可用，使用主源"], "eastmoney", "ok")
+        return ValidationResult(True, ["备源(AkShare)不可用，使用主源"], "eastmoney", "degraded")
 
     # 相对差异
     def rel_diff(a: float, b: float) -> float:
