@@ -33,7 +33,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install requests pandas numpy
+          pip install requests pandas numpy akshare
 
       - name: Run MACD resonance push
         run: python scripts/v43_push.py

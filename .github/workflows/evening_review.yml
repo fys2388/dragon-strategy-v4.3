@@ -23,7 +23,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install requests pandas numpy
+          pip install requests pandas numpy akshare
 
       - name: Run Review Push
         run: python3 scripts/daily_review_push.py

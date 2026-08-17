@@ -99,7 +99,11 @@ class TestScannerGate(unittest.TestCase):
 
     @mock.patch("strategies.macd_resonance.scanner.get_market_score",
                 return_value=(2.0, "评分不足", False))
-    def test_empty_when_market_below_threshold(self, m):
+    @mock.patch("strategies.macd_resonance.scanner.update_source_status")
+    @mock.patch("strategies.macd_resonance.scanner.send_feishu_alert", return_value=True)
+    @mock.patch("strategies.macd_resonance.scanner._fetch_both",
+                return_value={"eastmoney": None, "akshare": None})
+    def test_empty_when_market_below_threshold(self, m, m_status, m_alert, m_score):
         scanner = Scanner()
         scanner.base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         result = scanner.run()

@@ -1,0 +1,24 @@
+{
+  "eastmoney": {
+    "recent": [
+      {
+        "ts": "2026-08-17 11:04:00",
+        "ok": true
+      }
+    ],
+    "success": 1,
+    "fail": 0,
+    "success_rate": 100.0
+  },
+  "akshare": {
+    "recent": [
+      {
+        "ts": "2026-08-17 11:04:00",
+        "ok": false
+      }
+    ],
+    "success": 0,
+    "fail": 1,
+    "success_rate": 0.0
+  }
+}

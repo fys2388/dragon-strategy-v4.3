@@ -25,6 +25,9 @@ from .market_gate import get_market_score
 from .portfolio_manager import PortfolioManager
 from .trading_calendar import BJT, now_bjt
 from .signal_engine import SignalEngine, SignalType
+from .data_validator import (_fetch_both, send_feishu_alert, update_source_status,
+                             validate_market_data)
+from .market_regime import REGIME_LABELS, classify_regime
 
 LOCK = threading.Lock()
 
@@ -68,6 +71,16 @@ def setup_logger() -> logging.Logger:
 
 
 LOG = setup_logger()
+
+
+def _write_anomaly_log(line: str):
+    """追加数据异常日志到 logs/data_anomaly.log。"""
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        with open(os.path.join(LOG_DIR, "data_anomaly.log"), "a", encoding="utf-8") as f:
+            f.write(f"{now_bjt().strftime('%Y-%m-%d %H:%M:%S')} | {line}\n")
+    except Exception as e:
+        LOG.warning(f"异常日志写入失败: {e}")
 
 
 class Scanner:
@@ -201,6 +214,11 @@ class Scanner:
             "passed_count": 0,
             "resonance_count": 0,
             "recommend_count": 0,
+            "data_source": "eastmoney",
+            "validation_state": "ok",
+            "validation_anomalies": [],
+            "regime": "range_bound",
+            "data_error": False,
         }
         t0 = time.time()
 
@@ -215,15 +233,55 @@ class Scanner:
         except Exception as e:
             LOG.warning(f"持仓离场检查异常: {e}")
 
-        # 0.5 涨跌停家数（诊断用，异常兜底为 0）
-        try:
-            result["limit_up"], result["limit_down"] = ds.get_limit_up_down_count()
-            LOG.info(f"涨跌停家数：涨停{result['limit_up']}家 / 跌停{result['limit_down']}家")
-        except Exception as e:
-            LOG.warning(f"涨跌停统计异常: {e}")
+        # 0.5 数据自驱层：多源并发校验 + 自动降级
+        fetched = _fetch_both()
+        primary_md, backup_md = fetched["eastmoney"], fetched["akshare"]
+        update_source_status("eastmoney", primary_md is not None)
+        update_source_status("akshare", backup_md is not None)
+        vres = validate_market_data(primary_md, backup_md)
+        result["data_source"] = vres.chosen_source
+        result["validation_anomalies"] = vres.anomalies
+
+        # 双源都异常 → 推送「数据异常，策略暂停」，不执行扫描
+        if vres.severity == "fatal":
+            result["data_error"] = True
+            result["summary"] = "数据异常，策略暂停"
+            result["scan_elapsed"] = round(time.time() - t0, 1)
+            msg = "主源(东财)与备源(AkShare)均不可用，今日策略暂停执行，请检查数据源。"
+            LOG.error(msg)
+            _write_anomaly_log(msg)
+            send_feishu_alert(msg, "数据异常，策略暂停")
+            self._append_history(result)
+            return result
+
+        chosen_md = primary_md if vres.chosen_source == "eastmoney" else backup_md
+        # 校验状态：ok=正常 / switched=已切换备源 / degraded=有异常但继续
+        if vres.severity == "ok":
+            result["validation_state"] = "ok"
+        elif vres.chosen_source == "akshare":
+            result["validation_state"] = "switched"
+        else:
+            result["validation_state"] = "degraded"
+
+        if vres.chosen_source == "akshare":
+            LOG.warning("主源(东财)数据异常，已自动切换备源 AkShare")
+        if vres.anomalies:
+            detail = "; ".join(vres.anomalies)
+            LOG.warning(f"数据校验异常: {detail}")
+            _write_anomaly_log(f"data_validate | {detail}")
+            if vres.severity in ("warning", "critical"):
+                switch_txt = "已自动切换备源" if vres.chosen_source == "akshare" else "仍使用主源"
+                send_feishu_alert(f"数据异常告警：{detail}，{switch_txt}")
+
+        result["limit_up"] = int(chosen_md.limit_up_count)
+        result["limit_down"] = int(chosen_md.limit_down_count)
+        result["regime"] = classify_regime(chosen_md)
+        LOG.info(f"涨跌停家数：涨停{result['limit_up']}家 / 跌停{result['limit_down']}家 | "
+                 f"数据源={result['data_source']} | 市场环境={result['regime']}")
 
         # 1. 大盘门控
-        score, desc, can_open = get_market_score()
+        gate_md = chosen_md if vres.chosen_source == "akshare" else None
+        score, desc, can_open = get_market_score(market_data=gate_md)
         result["market_score"] = score
         result["market_desc"] = desc
         result["can_open"] = can_open
@@ -368,6 +426,13 @@ def build_message(result: Dict) -> str:
         lines.append(f"📈 诊断：{result['diagnosis']}")
     lines.append("⚠️ 仅为策略信号，不构成投资建议，最终操作请自行判断")
     now_full = now_bjt().strftime("%Y-%m-%d %H:%M:%S")
+    vstate = result.get("validation_state", "ok")
+    vtxt = {"ok": "✅正常", "switched": "⚠️已切换", "degraded": "⚠️部分异常"}.get(vstate, vstate)
+    regime = result.get("regime", "range_bound")
+    regime_txt = f"{regime}({REGIME_LABELS.get(regime, '')})"
+    lines.append(f"📡 数据源：东财(主)/AkShare(备) | 校验：{vtxt} | "
+                 f"市场环境：{regime_txt} | "
+                 f"扫描{result.get('scanned_count', 0)}只→过滤{result.get('passed_count', 0)}只→通过{result.get('resonance_count', 0)}只")
     lines.append(f"⏱ 触发时间：北京时间{now_full} | 扫描耗时{result.get('scan_elapsed', 0)}s | "
                  f"涨停{result.get('limit_up', 0)}家/跌停{result.get('limit_down', 0)}家 | "
                  f"过滤后{result.get('passed_count', 0)}只→共振通过{result.get('resonance_count', 0)}只")

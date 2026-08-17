@@ -11,15 +11,21 @@
 """
 from __future__ import annotations
 
-from typing import Tuple
+from typing import Optional, Tuple
 
 from . import data_source as ds
 from .data_source import get_limit_up_down_count  # noqa: F401  (re-export, 供外部验证命令导入)
 from .config import MARKET_GATE
 
 
-def get_market_score() -> Tuple[float, str, bool]:
+def get_market_score(market_data: Optional[object] = None) -> Tuple[float, str, bool]:
     """计算大盘评分。
+
+    传入 MarketData（数据自驱层选中源）时，成交额/涨跌停使用传入值；
+    未传入时走东财原始拉取（兼容旧调用）。
+
+    Args:
+        market_data: data_validator.MarketData 或 None。
 
     Returns:
         (分数, 档位描述, 是否允许开仓)
@@ -33,7 +39,10 @@ def get_market_score() -> Tuple[float, str, bool]:
     details.append(sh_detail)
 
     # 2. 两市成交额 ≥8000 亿（+1）
-    total_amount = ds.get_market_total_amount_yi()
+    if market_data is not None and market_data.volume_yi > 0:
+        total_amount = float(market_data.volume_yi)
+    else:
+        total_amount = ds.get_market_total_amount_yi()
     if total_amount >= 8000:
         score += 1
         details.append(f"✓ 两市成交额{total_amount:.0f}亿≥8000亿(+1)")
@@ -41,7 +50,11 @@ def get_market_score() -> Tuple[float, str, bool]:
         details.append(f"✗ 两市成交额{total_amount:.0f}亿<8000亿")
 
     # 3/4/5. 涨停/跌停家数
-    up, down = get_limit_up_down_count()
+    if market_data is not None:
+        up = int(market_data.limit_up_count)
+        down = int(market_data.limit_down_count)
+    else:
+        up, down = get_limit_up_down_count()
     if up >= 30:
         score += 1
         details.append(f"✓ 涨停{up}家≥30(+1)")

@@ -27,7 +27,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install requests pandas numpy
+          pip install requests pandas numpy akshare
 
       - name: Run Morning/Noon Push
         run: python3 scripts/morning_noon_push.py
