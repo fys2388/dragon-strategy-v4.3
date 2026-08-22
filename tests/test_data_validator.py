@@ -139,7 +139,7 @@ class TestScannerIntegration(unittest.TestCase):
         return (
             Scanner(),
             {
-                "fetch": mock.patch("strategies.macd_resonance.scanner._fetch_both",
+                "fetch": mock.patch("strategies.macd_resonance.scanner.get_data_with_fallback",
                                     return_value=fetched),
                 "status": mock.patch("strategies.macd_resonance.scanner.update_source_status"),
                 "score": mock.patch("strategies.macd_resonance.scanner.get_market_score",
@@ -153,8 +153,7 @@ class TestScannerIntegration(unittest.TestCase):
 
     def test_switch_to_backup_and_alert(self):
         """验收1：主源涨停0家 → 自动切备源 + 推送告警。"""
-        fetched = {"eastmoney": md(limit_up_count=0, source="eastmoney"),
-                   "akshare": md(limit_up_count=45, source="akshare")}
+        fetched = (md(limit_up_count=45, source="akshare"), "akshare")
         scanner, mocks = self._scanner_with_mocks(fetched)
         with mocks["fetch"] as mf, mocks["status"] as ms, mocks["score"] as msc, \
              mocks["alert"] as ma, mocks["pm"] as mp:
@@ -167,8 +166,7 @@ class TestScannerIntegration(unittest.TestCase):
 
     def test_ok_no_alert(self):
         """验收2：双源正常 → 无告警。"""
-        fetched = {"eastmoney": md(limit_up_count=48),
-                   "akshare": md(limit_up_count=52, source="akshare")}
+        fetched = (md(limit_up_count=48), "eastmoney")
         scanner, mocks = self._scanner_with_mocks(fetched)
         with mocks["fetch"] as mf, mocks["status"] as ms, mocks["score"] as msc, \
              mocks["alert"] as ma, mocks["pm"] as mp:
@@ -180,13 +178,13 @@ class TestScannerIntegration(unittest.TestCase):
 
     def test_double_fail_pauses(self):
         """双源异常 → 策略暂停，不执行扫描。"""
-        fetched = {"eastmoney": None, "akshare": None}
+        fetched = (None, "none")
         scanner, mocks = self._scanner_with_mocks(fetched)
         with mocks["fetch"] as mf, mocks["status"] as ms, mocks["score"] as msc, \
              mocks["alert"] as ma, mocks["pm"] as mp:
             result = scanner.run()
         self.assertTrue(result["data_error"])
-        self.assertEqual(result["summary"], "数据异常，策略暂停")
+        self.assertIn("策略暂停", result["summary"])
         self.assertEqual(result["entries"], [])
         ma.assert_called_once()
         # 门控不应被调用（不扫描）
@@ -206,7 +204,7 @@ class TestBuildMessageDataSourceLine(unittest.TestCase):
             "validation_state": "switched", "regime": "weak_trend",
         }
         msg = build_message(result)
-        self.assertIn("📡 数据源：东财(主)/AkShare(备) | 校验：⚠️已切换", msg)
+        self.assertIn("📡 数据源：AkShare(备1) | 校验：⚠️已切换", msg)
         self.assertIn("市场环境：weak_trend(弱势)", msg)
         self.assertIn("扫描10只→过滤6只→通过1只", msg)
 

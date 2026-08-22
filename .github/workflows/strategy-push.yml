@@ -1,20 +1,20 @@
 # -*- coding: utf-8 -*-
-# V1.0 策略推送：盘前/午盘/尾盘/周报/月报（非5分钟级）。
-# cron 时间表（GitHub Actions 使用 UTC，北京时间 = UTC+8）：
-# - 盘前完整版   9:15  BJT  → cron '15 1 * * 1-5'
-# - 午盘完整版   11:30 BJT  → cron '30 3 * * 1-5'
-# - 尾盘完整版   14:50 BJT  → cron '50 6 * * 1-5'
-# - 周度报告     周日 20:00 → cron '0 12 * * 0'
-# - 月度报告     每月28日 20:00 → cron '0 12 28 * *'
+# V1.0 策略推送：盘中扫描（盘前/复盘由 morning_noon_push.yml 与 evening_review.yml 负责）
+# 北京时间 = UTC + 8 小时，cron 按 UTC 配置，注释标注对应北京时间
+#
+# 盘中 10:00-11:30 / 13:00-14:30 → 每半小时
+#   UTC: 02:00-03:30 (上午) + 05:00-06:30 (下午)
+# 尾盘完整版 14:50 → UTC 06:50
 name: V1.0 MACD多周期共振策略推送
 
 on:
   schedule:
-    - cron: '15 1 * * 1-5'
-    - cron: '30 3 * * 1-5'
+    # 盘中上午 每半小时 (北京时间 10:00/10:30/11:00/11:30 → UTC 02:00/02:30/03:00/03:30)
+    - cron: '0,30 2-3 * * 1-5'
+    # 盘中下午 每半小时 (北京时间 13:00/13:30/14:00/14:30 → UTC 05:00/05:30/06:00/06:30)
+    - cron: '0,30 5-6 * * 1-5'
+    # 尾盘完整版 (北京时间 14:50 → UTC 06:50)
     - cron: '50 6 * * 1-5'
-    - cron: '0 12 * * 0'
-    - cron: '0 12 28 * *'
   workflow_dispatch:
 
 jobs:
@@ -36,6 +36,14 @@ jobs:
           pip install requests pandas numpy akshare
 
       - name: Run MACD resonance push
-        run: python scripts/v43_push.py
         env:
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+        run: python scripts/v43_push.py
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-log-${{ github.run_id }}
+          path: logs/
+          if-no-files-found: warn

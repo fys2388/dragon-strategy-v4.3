@@ -86,6 +86,7 @@ def _check_sh_ma20() -> Tuple[float, str]:
         return 0.0, "✗ 无法获取沪指数据"
 
     kline = ds.get_kline_daily("000001", count=25)
+    kline = ds.get_kline_daily("000001", count=25, is_index=True)
     if len(kline) < 21:
         return 0.0, "✗ 沪指日线数据不足"
 

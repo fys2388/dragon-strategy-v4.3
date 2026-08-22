@@ -10,6 +10,7 @@ venv/
 data/signal_cache.json
 portfolio_data.json
 data/data_source_status.json
+data/cache/
 logs/
 reports/output/*.json
 _strategy_review/

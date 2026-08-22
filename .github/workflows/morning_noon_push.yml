@@ -1,14 +1,12 @@
 # -*- coding: utf-8 -*-
-# 盘前 + 午盘推送。
-# cron 时间表（GitHub Actions 使用 UTC，北京时间 = UTC+8）：
-# - 盘前 09:15 BJT → cron '15 1 * * 1-5'
-# - 午盘 11:35 BJT → cron '35 3 * * 1-5'
+# 盘前报告推送：仅保留 09:15 盘前（盘中扫描由 strategy-push.yml 负责）
+# 北京时间 09:15 → UTC 01:15
 name: Morning & Noon Report Push
 
 on:
   schedule:
+    # 盘前报告 (北京时间 09:15 → UTC 01:15)
     - cron: '15 1 * * 1-5'
-    - cron: '35 3 * * 1-5'
   workflow_dispatch:
 
 jobs:
@@ -29,10 +27,15 @@ jobs:
         run: |
           pip install requests pandas numpy akshare
 
-      - name: Run Morning/Noon Push
-        run: python3 scripts/morning_noon_push.py
+      - name: Run morning/noon push
         env:
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+        run: python scripts/morning_noon_push.py
 
-      - name: Done
-        run: echo "Report pushed at $(date)"
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-log-${{ github.run_id }}
+          path: logs/
+          if-no-files-found: warn

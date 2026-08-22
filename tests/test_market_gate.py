@@ -32,8 +32,17 @@ class TestLimitUpDown(unittest.TestCase):
         self.assertEqual(up, 2)
         self.assertEqual(down, 2)
 
-    def test_failure_returns_zero(self):
-        with mock.patch.object(ds, "_request_get", return_value=None):
+    def test_failure_falls_back_to_sina(self):
+        # 东财接口失败 → 自动切换新浪备用源
+        with mock.patch.object(ds, "_request_get", return_value=None), \
+             mock.patch.object(ds, "_get_sina_limit_count", return_value=(45, 2)):
+            up, down = ds.get_limit_up_down_count()
+        self.assertEqual((up, down), (45, 2))
+
+    def test_sina_fallback_failure_returns_zero(self):
+        # 东财与新浪备用源均失败 → 返回 (0, 0) 不崩溃
+        with mock.patch.object(ds, "_request_get", return_value=None), \
+             mock.patch.object(ds, "_get_sina_limit_count", return_value=(0, 0)):
             up, down = ds.get_limit_up_down_count()
         self.assertEqual((up, down), (0, 0))
 

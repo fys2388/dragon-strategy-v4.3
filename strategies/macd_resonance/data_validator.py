@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -19,7 +20,20 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 from . import data_source as ds
+from .data_sources.source_sina import get_data_sina
 from .trading_calendar import now_bjt
+
+def _ensure_utf8_stdout():
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            reconfigure = getattr(stream, 'reconfigure', None)
+            if reconfigure:
+                reconfigure(encoding='utf-8', errors='replace')
+        except Exception:
+            pass
+
+
+_ensure_utf8_stdout()
 
 STATUS_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
                            "data", "data_source_status.json")
@@ -137,6 +151,40 @@ def get_data_akshare() -> Optional[MarketData]:
 
 
 # ============================================================
+# 三级数据源：东财 -> AkShare -> 新浪
+# ============================================================
+_SOURCE_CHAIN = ["eastmoney", "akshare", "sina"]
+
+
+def get_data_with_fallback():
+    """按优先级链获取市场数据，返回 (MarketData|None, chosen_source)."""
+    for src in _SOURCE_CHAIN:
+        if src == "eastmoney":
+            fn = get_data_eastmoney
+        elif src == "akshare":
+            fn = get_data_akshare
+        else:
+            fn = get_data_sina
+        data = fn()
+        if data is not None:
+            if isinstance(data, dict):
+                from .data_validator import MarketData
+                data = MarketData(
+                    index_price=data.get("index_price", 0),
+                    index_change_pct=data.get("index_change_pct", 0),
+                    volume_yi=data.get("volume_yi", 0),
+                    limit_up_count=data.get("limit_up_count", 0),
+                    limit_down_count=data.get("limit_down_count", 0),
+                    timestamp=data.get("timestamp", ""),
+                    source="sina",
+                )
+            print(f"[data_validator] 数据源 {src} 可用，指数={data.index_price:.2f} 涨停={data.limit_up_count}")
+            return data, src
+    print("[data_validator] 三源全部不可用")
+    return None, "none"
+
+
+# ============================================================
 # 双源并发拉取 + 交叉校验
 # ============================================================
 def _fetch_both() -> Dict[str, Optional[MarketData]]:
@@ -246,6 +294,40 @@ def update_source_status(source: str, ok: bool):
 def get_source_status() -> Dict:
     return _load_status()
 
+# ============================================================
+# 选股池校验
+# ============================================================
+MIN_POOL_SIZE = 100
+HEALTHY_POOL_SIZE = 3000
+
+
+def validate_stock_pool(pool):
+    """校验选股池数据质量。"""
+    anomalies = []
+    critical = False
+    if not pool:
+        return ValidationResult(False, ["选股池为空"], "none", "critical")
+    size = len(pool)
+    if size < MIN_POOL_SIZE:
+        critical = True
+        anomalies.append(f"选股池仅 {size} 只 < {MIN_POOL_SIZE}")
+    price_zeros = sum(1 for x in pool if not (x.get("price") or 0))
+    cap_zeros = sum(1 for x in pool if not (x.get("float_cap_yi") or 0))
+    if cap_zeros == size:
+        critical = True
+        anomalies.append("流通市值字段全为 0")
+    if price_zeros == size:
+        critical = True
+        anomalies.append("现价字段全为 0")
+    non_empty_rate = 1.0 - (price_zeros + cap_zeros) / max(size * 2, 1)
+    if not critical:
+        if size > HEALTHY_POOL_SIZE and non_empty_rate > 0.95:
+            return ValidationResult(True, [], "pool", "ok")
+        anomalies.append(f"池子 {size} 只（未达健康值 {HEALTHY_POOL_SIZE}）")
+        return ValidationResult(False, anomalies, "pool", "warning")
+    return ValidationResult(False, anomalies, "pool", "critical")
+
+
 
 # ============================================================
 # 飞书告警
@@ -275,3 +357,37 @@ def send_feishu_alert(message: str, title: str = "数据异常告警") -> bool:
     except Exception as e:
         print(f"❌ [alert] 告警推送失败: {e}")
         return False
+
+
+# ============================================================
+# 缓存辅助
+# ============================================================
+def get_cached_market():
+    try:
+        from .cache import get_cached
+        return get_cached("market")
+    except Exception:
+        return None
+
+def set_cached_market(data):
+    try:
+        from .cache import set_cached
+        if data is not None:
+            set_cached("market", {"index_price": data.index_price, "index_change_pct": data.index_change_pct, "volume_yi": data.volume_yi, "limit_up_count": data.limit_up_count, "limit_down_count": data.limit_down_count, "source": data.source, "timestamp": data.timestamp})
+    except Exception as e:
+        print(f"[cache] 写入失败: {e}")
+
+def get_cached_pool():
+    try:
+        from .cache import get_cached
+        return get_cached("stock_pool")
+    except Exception:
+        return None
+
+def set_cached_pool(pool):
+    try:
+        from .cache import set_cached
+        if pool:
+            set_cached("stock_pool", pool)
+    except Exception as e:
+        print(f"[cache] 写入失败: {e}")

@@ -22,9 +22,19 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Windows 控制台默认 GBK，强制 UTF-8 输出避免 emoji 报错
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _re = getattr(_stream, "reconfigure", None)
+        if _re:
+            _re(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 from strategies.macd_resonance import data_source as ds  # noqa: E402
 from strategies.macd_resonance.market_gate import get_market_score  # noqa: E402
 from strategies.macd_resonance.portfolio_manager import PortfolioManager  # noqa: E402
+from strategies.macd_resonance.trading_calendar import now_bjt  # noqa: E402
 from utils.config_loader import load_feishu_config  # noqa: E402
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -35,7 +45,7 @@ def load_today_records() -> list:
     """读取今日策略扫描记录。"""
     if not os.path.exists(HISTORY_FILE):
         return []
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = now_bjt().strftime("%Y-%m-%d")
     records = []
     with open(HISTORY_FILE, "r", encoding="utf-8") as f:
         for line in f:
@@ -85,7 +95,7 @@ def _load_dashboard_7d() -> str:
         spec = importlib.util.spec_from_file_location("generate_dashboard_data", mod_path)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
-        now = datetime.now()
+        now = now_bjt()
         records = mod.load_history()
         entries = mod.entries_in_window(records, 7, now)
         codes = sorted({str(e["code"]) for e in entries if e.get("code")})
@@ -97,7 +107,7 @@ def _load_dashboard_7d() -> str:
 
 
 def build_review_report() -> str:
-    now = datetime.now()
+    now = now_bjt()
     lines = [f"📋 MACD多周期共振策略 收盘复盘 {now.strftime('%Y-%m-%d')}"]
     lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 

@@ -28,6 +28,16 @@ def make_kline_df(n=80):
     return df
 
 
+def make_market_data():
+    """构造数据自驱层的 MarketData 快照（供扫描器集成测试 mock）。"""
+    from strategies.macd_resonance.data_validator import MarketData
+    return MarketData(
+        index_price=3300.0, index_change_pct=0.5, volume_yi=9000.0,
+        limit_up_count=50, limit_down_count=3,
+        timestamp="2026-08-17 10:00:00", source="eastmoney",
+    )
+
+
 def fake_calc_macd(df, fast=10, slow=20, signal=7, dif_val=0.1):
     out = df.copy()
     out["dif"] = [0.0] * (len(out) - 1) + [dif_val]
@@ -101,8 +111,8 @@ class TestScannerGate(unittest.TestCase):
                 return_value=(2.0, "评分不足", False))
     @mock.patch("strategies.macd_resonance.scanner.update_source_status")
     @mock.patch("strategies.macd_resonance.scanner.send_feishu_alert", return_value=True)
-    @mock.patch("strategies.macd_resonance.scanner._fetch_both",
-                return_value={"eastmoney": None, "akshare": None})
+    @mock.patch("strategies.macd_resonance.scanner.get_data_with_fallback",
+                return_value=(make_market_data(), "eastmoney"))
     def test_empty_when_market_below_threshold(self, m, m_status, m_alert, m_score):
         scanner = Scanner()
         scanner.base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

@@ -29,6 +29,15 @@ HISTORY_FILE = os.path.join(BASE_DIR, "data", "strategy_history.jsonl")
 OUTPUT_FILE = os.path.join(BASE_DIR, "data", "dashboard_data.json")
 
 
+def _naive(dt: datetime) -> datetime:
+    """去掉时区信息，统一与历史记录的 naive 时间戳比较。"""
+    if dt is None:
+        return dt
+    if dt.tzinfo is not None:
+        return dt.replace(tzinfo=None)
+    return dt
+
+
 def load_history() -> List[Dict]:
     """读取全部历史扫描记录。"""
     if not os.path.exists(HISTORY_FILE):
@@ -48,6 +57,7 @@ def load_history() -> List[Dict]:
 
 def entries_in_window(records: List[Dict], days: int, now: datetime) -> List[Dict]:
     """窗口内的推荐记录（按 code 去重，保留窗口内最早一次）。"""
+    now = _naive(now)
     cutoff = now - timedelta(days=days)
     seen: Dict[str, Dict] = {}
     for rec in records:
@@ -124,6 +134,7 @@ def build_dashboard(days: int, now: datetime, quotes: Dict[str, Dict]) -> Dict:
 
 
 def _ts_within(rec: Dict, days: int, now: datetime) -> bool:
+    now = _naive(now)
     try:
         ts = datetime.strptime(rec.get("ts", ""), "%Y-%m-%d %H:%M:%S")
     except (ValueError, TypeError):

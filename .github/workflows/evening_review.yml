@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
-# 收盘复盘推送：北京时间 18:00 = UTC 10:00，周一到周五。
+# 收盘复盘推送：北京时间 15:30 → UTC 07:30，周一到周五
 name: Evening Review Push
 
 on:
   schedule:
-    - cron: '0 10 * * 1-5'
+    # 收盘复盘 (北京时间 15:30 → UTC 07:30)
+    - cron: '30 7 * * 1-5'
   workflow_dispatch:
 
 jobs:
@@ -25,10 +26,15 @@ jobs:
         run: |
           pip install requests pandas numpy akshare
 
-      - name: Run Review Push
-        run: python3 scripts/daily_review_push.py
+      - name: Run evening review push
         env:
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+        run: python scripts/daily_review_push.py
 
-      - name: Done
-        run: echo "Evening review pushed at $(date)"
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: review-log-${{ github.run_id }}
+          path: logs/
+          if-no-files-found: warn

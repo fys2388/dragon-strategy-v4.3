@@ -19,9 +19,19 @@ from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Windows 控制台默认 GBK，强制 UTF-8 输出避免 emoji 报错
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _re = getattr(_stream, "reconfigure", None)
+        if _re:
+            _re(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 from strategies.macd_resonance import data_source as ds  # noqa: E402
 from strategies.macd_resonance.market_gate import get_market_score  # noqa: E402
 from strategies.macd_resonance.portfolio_manager import PortfolioManager  # noqa: E402
+from strategies.macd_resonance.trading_calendar import now_bjt  # noqa: E402
 from utils.config_loader import load_feishu_config  # noqa: E402
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -152,7 +162,7 @@ def _entries_section(records: list, limit: int = 6) -> list:
 
 
 def build_premarket_report() -> str:
-    now = datetime.now()
+    now = now_bjt()
     lines = [f"🌅 盘前报告 {now.strftime('%Y-%m-%d')} MACD多周期共振V1.0"]
     lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     lines += _market_section()
@@ -173,7 +183,7 @@ def build_premarket_report() -> str:
 
 
 def build_noon_report() -> str:
-    now = datetime.now()
+    now = now_bjt()
     lines = [f"☀️ 午间点评 {now.strftime('%Y-%m-%d')} MACD多周期共振V1.0"]
     lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     lines += _market_section()
@@ -205,7 +215,7 @@ def main():
     if mode_arg:
         mode = mode_arg
     else:
-        hour = datetime.now().hour
+        hour = now_bjt().hour
         mode = "premarket" if hour < 11 else "noon"
 
     report = build_premarket_report() if mode == "premarket" else build_noon_report()

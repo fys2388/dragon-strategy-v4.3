@@ -23,10 +23,10 @@ from .config import RISK, SIGNAL
 from .filters import pass_hard_filters
 from .market_gate import get_market_score
 from .portfolio_manager import PortfolioManager
-from .trading_calendar import BJT, now_bjt
+from .trading_calendar import BJT, is_trading_time, now_bjt
 from .signal_engine import SignalEngine, SignalType
-from .data_validator import (_fetch_both, send_feishu_alert, update_source_status,
-                             validate_market_data)
+from .data_validator import (ValidationResult, get_data_with_fallback, send_feishu_alert,
+                             update_source_status, validate_stock_pool, get_cached_pool, set_cached_pool)
 from .market_regime import REGIME_LABELS, classify_regime
 
 LOCK = threading.Lock()
@@ -36,6 +36,7 @@ LOCK = threading.Lock()
 # ============================================================
 LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "logs")
 HISTORY_FILE = os.path.join(os.path.dirname(LOG_DIR), "data", "strategy_history.jsonl")
+MIN_POOL_SIZE = 100  # 选股池最小数量（正常 A 股 5000+ 只）
 
 
 class _BJTFormatter(logging.Formatter):
@@ -153,6 +154,34 @@ class Scanner:
     # ----------------------------------------------------------
     # 快速初筛（价格/市值/名称，不拉K线）
     # ----------------------------------------------------------
+    def _fetch_pool_with_retry(self, max_stocks: int,
+                               min_size: int = MIN_POOL_SIZE,
+                               retries: int = 2, gap: float = 2.0) -> List[Dict]:
+        """获取选股池，不足 min_size 只时重试 retries 次（间隔 gap 秒）。"""
+        # 当日缓存优先：避免多次扫描重复请求接口（大盘数据同理由 data_validator 处理）
+        try:
+            cached = data_validator.get_cached_pool()
+            cached = get_cached_pool()
+            if cached and len(cached) >= min_size:
+                LOG.info(f"选股池使用当日缓存：{len(cached)} 只")
+                return cached[:max_stocks]
+        except Exception as e:
+            LOG.warning(f"选股池缓存读取失败: {e}")
+        stocks: List[Dict] = []
+        for attempt in range(retries + 1):
+            stocks = ds.get_mainboard_stocks(limit=max_stocks)
+            if len(stocks) >= min_size:
+                try:
+                    data_validator.set_cached_pool(stocks)
+                    set_cached_pool(stocks)
+                except Exception as e:
+                    LOG.warning(f"选股池缓存写入失败: {e}")
+                return stocks
+            LOG.warning(f"选股池异常: 仅 {len(stocks)} 只 < {min_size}（第 {attempt + 1}/{retries + 1} 次）")
+            if attempt < retries:
+                time.sleep(gap)
+        return stocks
+
     def _quick_filter(self, stock: dict) -> bool:
         name = str(stock.get("name", ""))
         if "ST" in name.upper() or "退" in name:
@@ -187,7 +216,8 @@ class Scanner:
     # ----------------------------------------------------------
     # 主扫描
     # ----------------------------------------------------------
-    def run(self, max_stocks: int = 2000, need_push: bool = False) -> Dict:
+    def run(self, max_stocks: int = 2000, need_push: bool = False,
+            source: str = "auto") -> Dict:
         """执行扫描。
 
         Returns:
@@ -233,45 +263,71 @@ class Scanner:
         except Exception as e:
             LOG.warning(f"持仓离场检查异常: {e}")
 
-        # 0.5 数据自驱层：多源并发校验 + 自动降级
-        fetched = _fetch_both()
-        primary_md, backup_md = fetched["eastmoney"], fetched["akshare"]
-        update_source_status("eastmoney", primary_md is not None)
-        update_source_status("akshare", backup_md is not None)
-        vres = validate_market_data(primary_md, backup_md)
-        result["data_source"] = vres.chosen_source
-        result["validation_anomalies"] = vres.anomalies
-
-        # 双源都异常 → 推送「数据异常，策略暂停」，不执行扫描
-        if vres.severity == "fatal":
-            result["data_error"] = True
-            result["summary"] = "数据异常，策略暂停"
-            result["scan_elapsed"] = round(time.time() - t0, 1)
-            msg = "主源(东财)与备源(AkShare)均不可用，今日策略暂停执行，请检查数据源。"
-            LOG.error(msg)
-            _write_anomaly_log(msg)
-            send_feishu_alert(msg, "数据异常，策略暂停")
-            self._append_history(result)
-            return result
-
-        chosen_md = primary_md if vres.chosen_source == "eastmoney" else backup_md
-        # 校验状态：ok=正常 / switched=已切换备源 / degraded=有异常但继续
-        if vres.severity == "ok":
+        # 0.5 数据自驱层：三源降级（东财 → AkShare → 新浪）+ 熔断
+        chosen_md = None
+        if source in ("eastmoney", "akshare", "sina"):
+            from .data_validator import get_data_eastmoney, get_data_akshare, get_data_sina
+            fn_map = {"eastmoney": get_data_eastmoney, "akshare": get_data_akshare, "sina": get_data_sina}
+            forced = fn_map[source]()
+            update_source_status(source, forced is not None)
+            if forced is None:
+                result["data_error"] = True
+                result["summary"] = f"强制数据源 {source} 不可用，跳过本次扫描"
+                result["scan_elapsed"] = round(time.time() - t0, 1)
+                msg = f"指定数据源 {source} 不可用，已跳过本次扫描。"
+                LOG.error(msg)
+                _write_anomaly_log(msg)
+                send_feishu_alert(msg, "数据源不可用")
+                self._append_history(result)
+                return result
+            chosen_md = forced
+            result["data_source"] = source
             result["validation_state"] = "ok"
-        elif vres.chosen_source == "akshare":
-            result["validation_state"] = "switched"
+            LOG.info(f"强制数据源 {source} 可用，指数={chosen_md.index_price:.2f}")
         else:
-            result["validation_state"] = "degraded"
+            chosen_md, chosen_src = get_data_with_fallback()
+            update_source_status("eastmoney", chosen_src == "eastmoney")
+            update_source_status("akshare", chosen_src == "akshare")
+            update_source_status("sina", chosen_src == "sina")
+            result["data_source"] = chosen_src
+            result["validation_state"] = "ok" if chosen_src == "eastmoney" else "switched"
+            if chosen_src == "none":
+                result["data_error"] = True
+                result["summary"] = "数据异常，策略暂停"
+                result["scan_elapsed"] = round(time.time() - t0, 1)
+                msg = "东财/AkShare/新浪三源均不可用，今日策略暂停执行，请检查网络或数据源。"
+                LOG.error(msg)
+                _write_anomaly_log(msg)
+                send_feishu_alert(msg, "数据异常，策略暂停")
+                self._append_history(result)
+                return result
+            if chosen_src != "eastmoney":
+                LOG.warning(f"主源(东财)不可用，自动切换 {chosen_src}")
+                _write_anomaly_log(f"data_validate | 主源不可用，切换 {chosen_src}")
+                send_feishu_alert(f"主源(东财)不可用，已自动切换至 {chosen_src} 数据源")
 
-        if vres.chosen_source == "akshare":
-            LOG.warning("主源(东财)数据异常，已自动切换备源 AkShare")
-        if vres.anomalies:
-            detail = "; ".join(vres.anomalies)
-            LOG.warning(f"数据校验异常: {detail}")
-            _write_anomaly_log(f"data_validate | {detail}")
-            if vres.severity in ("warning", "critical"):
-                switch_txt = "已自动切换备源" if vres.chosen_source == "akshare" else "仍使用主源"
-                send_feishu_alert(f"数据异常告警：{detail}，{switch_txt}")
+        # 熔断：数据有效性前置校验（指数为0 / 交易时段涨跌停均为0）
+        if chosen_md is not None:
+            if chosen_md.index_price <= 0:
+                result["data_error"] = True
+                msg = "行情数据异常：指数价格为0，本次扫描暂停。"
+                LOG.error(msg)
+                _write_anomaly_log(f"circuit_break | {msg}")
+                send_feishu_alert(msg, "行情数据异常")
+                result["summary"] = msg
+                result["scan_elapsed"] = round(time.time() - t0, 1)
+                self._append_history(result)
+                return result
+            if is_trading_time() and chosen_md.limit_up_count == 0 and chosen_md.limit_down_count == 0:
+                result["data_error"] = True
+                msg = "行情数据异常：交易时段内涨跌停数为0，疑似接口故障，本次扫描暂停。"
+                LOG.error(msg)
+                _write_anomaly_log(f"circuit_break | {msg}")
+                send_feishu_alert(msg, "行情数据异常")
+                result["summary"] = msg
+                result["scan_elapsed"] = round(time.time() - t0, 1)
+                self._append_history(result)
+                return result
 
         result["limit_up"] = int(chosen_md.limit_up_count)
         result["limit_down"] = int(chosen_md.limit_down_count)
@@ -279,9 +335,8 @@ class Scanner:
         LOG.info(f"涨跌停家数：涨停{result['limit_up']}家 / 跌停{result['limit_down']}家 | "
                  f"数据源={result['data_source']} | 市场环境={result['regime']}")
 
-        # 1. 大盘门控
-        gate_md = chosen_md if vres.chosen_source == "akshare" else None
-        score, desc, can_open = get_market_score(market_data=gate_md)
+        # 1. 大盘门控（使用选中源的同一快照）
+        score, desc, can_open = get_market_score(market_data=chosen_md)
         result["market_score"] = score
         result["market_desc"] = desc
         result["can_open"] = can_open
@@ -293,16 +348,33 @@ class Scanner:
             self._append_history(result)
             return result
 
-        # 2. 标的池 + 初筛
-        all_stocks = ds.get_mainboard_stocks(limit=max_stocks)
-        if not all_stocks:
-            result["summary"] = "获取标的池失败"
-            LOG.warning(result["summary"])
+        # 2. 标的池 + 初筛（空池保护：<100 只重试 2 次，仍失败推送告警并跳过）
+        all_stocks = self._fetch_pool_with_retry(max_stocks)
+        if len(all_stocks) < MIN_POOL_SIZE:
+            result["summary"] = "选股池数据异常，已跳过本次扫描"
+            LOG.error(f"{result['summary']}（仅 {len(all_stocks)} 只）")
+            _write_anomaly_log(f"stock_pool | 选股池仅 {len(all_stocks)} 只 < {MIN_POOL_SIZE}")
+            send_feishu_alert(
+                f"选股池数据异常：获取 {len(all_stocks)} 只（< {MIN_POOL_SIZE}），已跳过本次扫描。",
+                "选股池数据异常")
+            result["scan_elapsed"] = round(time.time() - t0, 1)
+            self._append_history(result)
+            return result
+
+        # 池质量校验（f20/f2 字段完整性）
+        pv = validate_stock_pool(all_stocks)
+        result["pool_validation"] = pv.severity
+        if pv.severity == "critical":
+            detail = "; ".join(pv.anomalies)
+            LOG.error(f"选股池校验失败: {detail}")
+            _write_anomaly_log(f"stock_pool | {detail}")
+            send_feishu_alert(f"选股池数据异常：{detail}，已跳过本次扫描。", "选股池数据异常")
+            result["summary"] = "选股池数据异常，已跳过本次扫描"
             result["scan_elapsed"] = round(time.time() - t0, 1)
             self._append_history(result)
             return result
         candidates = [s for s in all_stocks if self._quick_filter(s)]
-        LOG.info(f"标的池 {len(all_stocks)} 只 → 初筛 {len(candidates)} 只")
+        LOG.info(f"标的池 {len(all_stocks)} 只（校验:{pv.severity}）→ 初筛 {len(candidates)} 只")
 
         # 3. 硬过滤（并发补齐 20 日均额/振幅）
         with ThreadPoolExecutor(max_workers=8) as pool:
@@ -430,7 +502,8 @@ def build_message(result: Dict) -> str:
     vtxt = {"ok": "✅正常", "switched": "⚠️已切换", "degraded": "⚠️部分异常"}.get(vstate, vstate)
     regime = result.get("regime", "range_bound")
     regime_txt = f"{regime}({REGIME_LABELS.get(regime, '')})"
-    lines.append(f"📡 数据源：东财(主)/AkShare(备) | 校验：{vtxt} | "
+    ds_name = {"eastmoney": "东财(主)", "akshare": "AkShare(备1)", "sina": "新浪(备2)", "none": "无"}.get(result.get("data_source", "eastmoney"), result.get("data_source", "eastmoney"))
+    lines.append(f"📡 数据源：{ds_name} | 校验：{vtxt} | "
                  f"市场环境：{regime_txt} | "
                  f"扫描{result.get('scanned_count', 0)}只→过滤{result.get('passed_count', 0)}只→通过{result.get('resonance_count', 0)}只")
     lines.append(f"⏱ 触发时间：北京时间{now_full} | 扫描耗时{result.get('scan_elapsed', 0)}s | "
@@ -443,10 +516,23 @@ def main():
     parser = argparse.ArgumentParser(description="MACD 多周期共振策略扫描器")
     parser.add_argument("--push", action="store_true", help="推送模式：标记已推送（冷却）")
     parser.add_argument("--max", type=int, default=2000, help="扫描股票上限")
+    parser.add_argument("--source", choices=["auto", "eastmoney", "akshare", "sina"], default="auto",
+                        help="数据源选择：auto自动(默认)/eastmoney强制主源/akshare备1/sina备2")
     args = parser.parse_args()
 
+    # 交易时段窗口：盘前 9:15-9:30 + 盘中 9:30-11:30/13:00-15:00。
+    # 本机任务计划程序/云端 cron 均在窗口内触发；TEST_MODE=true 可跳过（手动排查用）。
+    if os.environ.get("TEST_MODE", "").lower() != "true":
+        now = now_bjt()
+        hm = now.hour * 100 + now.minute
+        in_window = now.weekday() < 5 and (915 <= hm < 930 or is_trading_time(now))
+        if not in_window:
+            print(f"📌 非交易时段（北京时间 {now.strftime('%Y-%m-%d %H:%M:%S')}），跳过扫描。"
+                  f"如需强制运行请设置 TEST_MODE=true")
+            return
+
     scanner = Scanner()
-    result = scanner.run(max_stocks=args.max, need_push=args.push)
+    result = scanner.run(max_stocks=args.max, need_push=args.push, source=args.source)
     msg = build_message(result)
     print(msg)
     print("\n[SUMMARY]", result["summary"])
