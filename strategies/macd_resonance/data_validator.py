@@ -151,9 +151,34 @@ def get_data_akshare() -> Optional[MarketData]:
 
 
 # ============================================================
-# 三级数据源：东财 -> AkShare -> 新浪
+# 三级数据源：东财 -> 新浪 -> AkShare
+# 说明：AkShare 的 *_em 接口底层仍走东财 push2.eastmoney.com，
+#       与东财同源、在海外IP/东财不可达时同样失败且内部重试可能长时间挂起，
+#       故把真正独立、对海外IP友好的新浪放在 AkShare 之前。
 # ============================================================
-_SOURCE_CHAIN = ["eastmoney", "akshare", "sina"]
+_SOURCE_CHAIN = ["eastmoney", "sina", "akshare"]
+_AKSHARE_TIMEOUT = 15  # 秒；AkShare 内部网络重试无超时，强制兜底
+
+
+def _run_with_timeout(fn, timeout: float):
+    """在守护线程中执行 fn，超过 timeout 返回 None（防止数据源挂死）。"""
+    import queue
+    q: queue.Queue = queue.Queue()
+
+    def worker():
+        try:
+            q.put(fn())
+        except Exception as e:  # noqa: BLE001
+            print(f"[data_validator] {getattr(fn, '__name__', 'source')} 异常: {e}")
+            q.put(None)
+
+    t = threading.Thread(target=worker, daemon=True)
+    t.start()
+    try:
+        return q.get(timeout=timeout)
+    except queue.Empty:
+        print(f"[data_validator] {getattr(fn, '__name__', 'source')} 超时({timeout}s)，放弃")
+        return None
 
 
 def get_data_with_fallback():
@@ -162,7 +187,7 @@ def get_data_with_fallback():
         if src == "eastmoney":
             fn = get_data_eastmoney
         elif src == "akshare":
-            fn = get_data_akshare
+            fn = lambda: _run_with_timeout(get_data_akshare, _AKSHARE_TIMEOUT)
         else:
             fn = get_data_sina
         data = fn()
