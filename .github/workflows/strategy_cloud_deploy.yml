@@ -29,7 +29,7 @@ on:
 jobs:
   run-strategy-push:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - name: 拉取仓库代码
         uses: actions/checkout@v4

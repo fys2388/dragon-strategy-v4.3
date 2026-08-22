@@ -17,7 +17,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from strategies.macd_resonance.scanner import Scanner, build_message  # noqa: E402
 from strategies.macd_resonance.trading_calendar import is_trading_time, now_bjt  # noqa: E402
 
-SCAN_TIMEOUT_S = 240  # 扫描硬超时（秒）：数据源异常挂起时兜底，防止阻塞 5 分钟节奏
+SCAN_TIMEOUT_S = 480  # 扫描硬超时（秒）：数据源异常挂起时兜底
+SCAN_MAX_STOCKS = 1200  # 定时扫描标的池规模（按成交额降序，活跃标的；控制 5 分钟节奏内的耗时）
 
 
 def send_feishu_alert(text: str, title: str = "策略告警"):
@@ -54,7 +55,7 @@ def main():
     result_box: dict = {}
 
     def _scan():
-        result_box["r"] = scanner.run(need_push=True)
+        result_box["r"] = scanner.run(need_push=True, max_stocks=SCAN_MAX_STOCKS)
 
     t = threading.Thread(target=_scan, daemon=True)
     t.start()

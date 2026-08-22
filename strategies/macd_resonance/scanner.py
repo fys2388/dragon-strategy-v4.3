@@ -160,7 +160,6 @@ class Scanner:
         """获取选股池，不足 min_size 只时重试 retries 次（间隔 gap 秒）。"""
         # 当日缓存优先：避免多次扫描重复请求接口（大盘数据同理由 data_validator 处理）
         try:
-            cached = data_validator.get_cached_pool()
             cached = get_cached_pool()
             if cached and len(cached) >= min_size:
                 LOG.info(f"选股池使用当日缓存：{len(cached)} 只")
@@ -172,7 +171,6 @@ class Scanner:
             stocks = ds.get_mainboard_stocks(limit=max_stocks)
             if len(stocks) >= min_size:
                 try:
-                    data_validator.set_cached_pool(stocks)
                     set_cached_pool(stocks)
                 except Exception as e:
                     LOG.warning(f"选股池缓存写入失败: {e}")
@@ -191,6 +189,12 @@ class Scanner:
         if price < 3.0 or price > 35.0:
             return False
         if cap < 30 or cap > 600:
+            return False
+        # 成交额预过滤（用池内当日成交额作 20 日均额的宽松代理）：
+        # 当日成交额过低者基本不可能满足 amount_20d≥0.8亿 硬过滤，提前剔除，
+        # 大幅减少后续逐票拉 K 线的耗时（云端 5 分钟节奏必需）。
+        amt = float(stock.get("amount_yi", 0) or 0)
+        if amt > 0 and amt < 0.5:  # 仅当日已有成交额且 <5000万 时剔除
             return False
         return True
 
@@ -377,7 +381,7 @@ class Scanner:
         LOG.info(f"标的池 {len(all_stocks)} 只（校验:{pv.severity}）→ 初筛 {len(candidates)} 只")
 
         # 3. 硬过滤（并发补齐 20 日均额/振幅）
-        with ThreadPoolExecutor(max_workers=8) as pool:
+        with ThreadPoolExecutor(max_workers=12) as pool:
             enriched = list(pool.map(self._enrich_hard_metrics, candidates))
         passed = []
         reject_reasons = Counter()
@@ -400,7 +404,7 @@ class Scanner:
             delay.wait(0.3)
             return self.engine.analyze_stock(stock["code"], stock["name"], stock["price"])
 
-        with ThreadPoolExecutor(max_workers=8) as pool:
+        with ThreadPoolExecutor(max_workers=12) as pool:
             futs = [pool.submit(analyze, s) for s in passed]
             for fut in as_completed(futs):
                 try:
