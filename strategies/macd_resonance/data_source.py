@@ -574,6 +574,9 @@ def _get_mainboard_stocks_sina(limit: int = 6000, verbose_pool: bool = True) -> 
                 })
             if len(data) < 100:
                 break
+            # 按成交额降序翻页，达到 limit 即提前停止，避免海外IP下翻满全A造成超时
+            if len(seen) >= limit:
+                break
     except Exception as e:
         print(f"[data_source] 新浪选股池备用源失败: {e}")
     result = stocks[:limit]
