@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 from datetime import datetime
 
 # 允许直接运行脚本时导入 strategies 包
@@ -15,6 +16,17 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from strategies.macd_resonance.scanner import Scanner, build_message  # noqa: E402
 from strategies.macd_resonance.trading_calendar import is_trading_time, now_bjt  # noqa: E402
+
+SCAN_TIMEOUT_S = 240  # 扫描硬超时（秒）：数据源异常挂起时兜底，防止阻塞 5 分钟节奏
+
+
+def send_feishu_alert(text: str, title: str = "策略告警"):
+    """推送飞书告警（复用扫描器的 webhook 逻辑）。"""
+    webhook = os.environ.get("FEISHU_WEBHOOK_URL", "")
+    if not webhook:
+        return
+    import requests
+    requests.post(webhook, json={"msg_type": "text", "content": {"text": f"【{title}】{text}"}}, timeout=8)
 
 
 def should_run(now: datetime) -> bool:
@@ -38,7 +50,24 @@ def main():
         return
 
     scanner = Scanner()
-    result = scanner.run(need_push=True)
+    # 硬超时看门狗：数据源在云端异常挂起时，强制结束扫描，避免阻塞 5 分钟节奏
+    result_box: dict = {}
+
+    def _scan():
+        result_box["r"] = scanner.run(need_push=True)
+
+    t = threading.Thread(target=_scan, daemon=True)
+    t.start()
+    t.join(timeout=SCAN_TIMEOUT_S)
+    if t.is_alive():
+        print(f"⏰ 扫描超过 {SCAN_TIMEOUT_S}s 超时，强制结束（数据源可能异常）")
+        result = {"summary": f"扫描超时（>{SCAN_TIMEOUT_S}s），已中断"}
+        try:
+            send_feishu_alert(f"扫描超时（>{SCAN_TIMEOUT_S}s），数据源可能异常。", "扫描超时")
+        except Exception as e:  # noqa: BLE001
+            print(f"⚠️ 超时告警推送失败: {e}")
+    else:
+        result = result_box.get("r", {"summary": "扫描无结果"})
     msg = build_message(result)
     print(msg)
     print("\n[SUMMARY]", result["summary"])
