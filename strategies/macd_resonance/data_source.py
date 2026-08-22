@@ -8,12 +8,17 @@
 """
 from __future__ import annotations
 
+import os
 import time
 import requests
 import pandas as pd
 from typing import Dict, List, Optional
 
 from .config import DATA_SOURCE, KLT_MAP
+
+# 云端模式：GitHub Actions 海外 IP 访问东财不稳定，直接以新浪/腾讯为取数源，
+# 跳过东财主源逐项超时，避免每只候选股×每个周期都先等东财超时拖垮全流程。
+_IS_CLOUD = os.environ.get("IS_CLOUD", "").lower() == "true"
 
 _BASE = DATA_SOURCE["base_url"]
 _KLINE = DATA_SOURCE["kline_url"]
@@ -268,6 +273,13 @@ def get_kline(code: str, period: str = "daily", count: int = 200, is_index: bool
     """
     if period not in KLT_MAP:
         return pd.DataFrame()
+    if _IS_CLOUD:
+        # 云端：跳过东财主源，直接 新浪 → 腾讯，避免海外IP逐项超时
+        for fn in (_get_kline_sina, _get_kline_tencent):
+            df = fn(code, period, count)
+            if not df.empty:
+                return df
+        return pd.DataFrame()
     klt = KLT_MAP[period]
     params = {
         "secid": code_to_secid(code),
@@ -487,6 +499,8 @@ def get_market_indices() -> Dict[str, Dict]:
         "fields": "f2,f3,f4,f6,f12,f14",
         "secids": "1.000001,0.399001,0.399006,1.000300,1.000016",
     }
+    if _IS_CLOUD:
+        return _get_sina_indices()
     data = _request_get(f"{_BASE}/api/qt/ulist.np/get", params)
     indices = {}
     if data and data.get("data") and data["data"].get("diff"):
@@ -580,6 +594,8 @@ def get_mainboard_stocks(limit: int = 6000, verbose_pool: bool = True) -> List[D
 
     返回字段：code / name / price / float_cap_yi / amount_yi
     """
+    if _IS_CLOUD:
+        return _get_mainboard_stocks_sina(limit, verbose_pool)
     stocks: List[Dict] = []
     seen: set = set()
     max_pages = POOL_MAX_PAGES  # limit 仅作提前停止条件，不缩减翻页上限
@@ -656,6 +672,8 @@ def get_limit_up_down_count() -> tuple[int, int]:
     Returns:
         (涨停家数, 跌停家数)；接口失败返回 (0, 0) 并打印错误日志，不崩溃。
     """
+    if _IS_CLOUD:
+        return _get_sina_limit_count()
     params = {
         "pn": 1, "pz": 6000, "po": 1, "np": 1, "ut": _UT,
         "fltt": 2, "invt": 2, "fid": "f3",
