@@ -2,9 +2,9 @@
 # V1.0 云端策略推送：唯一盘中推送工作流（云端部署，推送至飞书）。
 # 数据源三源降级（东财→新浪→AkShare），新浪对海外IP友好，云端可稳定取数。
 # cron 时间表（GitHub Actions 使用 UTC，北京时间 = UTC+8）：
-# - 盘前完整版   9:15  BJT  →  cron '15 1 * * 1-5'
-# - 盘中上午     10:00-11:30 每5分钟 → cron '0-55/5 2 * * 1-5' + '0-30/5 3 * * 1-5'
-# - 盘中下午     13:00-14:30 每5分钟 → cron '0-55/5 5 * * 1-5' + '0-30/5 6 * * 1-5'
+# - 盘前报告     9:15  BJT  →  cron '15 1 * * 1-5'（REPORT_MODE=premarket，发盘前报告）
+# - 盘中上午     10:00-11:59 每10分钟 → cron '*/10 2-3 * * 1-5'
+# - 盘中下午     13:00-14:59 每10分钟 → cron '*/10 5-6 * * 1-5'
 # - 尾盘完整版   14:50  BJT  →  cron '50 6 * * 1-5'
 name: V1.0 MACD多周期共振策略云推送
 run-name: "云端策略推送 @ ${{ github.actor }}"
@@ -49,6 +49,9 @@ jobs:
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
           IS_CLOUD: "true"
           TEST_MODE: ${{ inputs.test_mode || 'false' }}
+          # 按触发档位决定报告类型：9:15 档发盘前报告，其余档发盘中实时扫描。
+          # github.event.schedule 是触发本次运行的 cron 表达式（workflow_dispatch 时为 null → scan）。
+          REPORT_MODE: ${{ github.event.schedule == '15 1 * * 1-5' && 'premarket' || 'scan' }}
         run: |
           python scripts/v43_push.py
 

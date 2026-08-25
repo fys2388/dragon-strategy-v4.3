@@ -3,6 +3,11 @@
 
 调用 MACD 多周期共振策略扫描器，推送飞书。
 兼容工作流调用：python scripts/v43_push.py
+
+报告类型由 REPORT_MODE 环境变量决定：
+- "premarket"：推送盘前报告（9:15 档），不扫描
+- "scan"    ：执行扫描并推送盘中实时报告
+- 未设置     ：按当前北京时间自动选择（9:15-9:30 窗口 → 盘前报告，其余交易时段 → 扫描）
 """
 from __future__ import annotations
 
@@ -40,18 +45,77 @@ def should_run(now: datetime) -> bool:
     return is_trading_time(now)
 
 
+def _send_text(msg: str) -> bool:
+    """推送纯文本到飞书。"""
+    webhook = os.environ.get("FEISHU_WEBHOOK_URL", "")
+    if not webhook:
+        print("⚠️ 未配置 FEISHU_WEBHOOK_URL，跳过推送")
+        return False
+    import requests
+    try:
+        resp = requests.post(webhook, json={"msg_type": "text", "content": {"text": msg}}, timeout=8)
+        print(f"✅ 飞书推送完成，HTTP {resp.status_code}")
+        return True
+    except Exception as e:
+        print(f"❌ 飞书推送失败: {e}")
+        return False
+
+
+def push_premarket_report() -> None:
+    """盘前报告：复用 morning_noon_push 的生成逻辑（大盘概况+昨日推荐+持仓提醒）。"""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # scripts/ 目录
+    from morning_noon_push import build_premarket_report  # noqa: E402
+    msg = build_premarket_report()
+    print(msg)
+    print()
+    _send_text(msg)
+
+
+def resolve_report_mode(now: datetime) -> str:
+    """由环境变量/时间决定报告类型：premarket | scan | skip。
+
+    REPORT_MODE 由工作流按触发档位显式传入（9:15 档 → premarket，盘中档 → scan），
+    不依赖当前时间，GitHub 调度延迟也不会把 9:15 档误判为盘中扫描。
+    """
+    mode = os.environ.get("REPORT_MODE", "").strip().lower()
+    if mode == "premarket":
+        # 守卫：盘前档若被 GitHub 延迟到 9:45 之后才运行，跳过推送，
+        # 避免迟到盘前报告与盘中实时报告撞车（用户投诉的场景）。
+        hm = now.hour * 100 + now.minute
+        if hm >= 945:
+            print(f"⏰ 盘前档被延迟到 {now.strftime('%H:%M')}，已过盘前窗口，跳过（避免与盘中重复）")
+            return "skip"
+        return "premarket"
+    if mode == "scan":
+        return "scan"
+    # 手动触发（REPORT_MODE 为空）：按当前时间自动选择
+    if now.weekday() >= 5:
+        return "skip"
+    hm = now.hour * 100 + now.minute
+    if 915 <= hm < 930:
+        return "premarket"
+    return "scan" if is_trading_time(now) else "skip"
+
+
 def main():
     now = now_bjt()
     test_mode = os.environ.get("TEST_MODE", "").lower() == "true"
+    report_mode = resolve_report_mode(now)
     print(f"[交易时段检查] 北京时间={now.strftime('%Y-%m-%d %H:%M:%S')} "
           f"weekday={now.weekday()} is_trading={is_trading_time(now)} "
-          f"should_run={should_run(now)} test_mode={test_mode}")
-    if not test_mode and not should_run(now):
+          f"should_run={should_run(now)} test_mode={test_mode} report_mode={report_mode}")
+
+    if test_mode:
+        report_mode = "scan"  # 测试模式始终执行扫描（供手动验证数据源/推送链路）
+    if report_mode == "skip":
         print(f"📌 非交易时段 {now.strftime('%Y-%m-%d %H:%M')}，退出")
+        return
+    if report_mode == "premarket":
+        push_premarket_report()
         return
 
     scanner = Scanner()
-    # 硬超时看门狗：数据源在云端异常挂起时，强制结束扫描，避免阻塞 5 分钟节奏
+    # 硬超时看门狗：数据源在云端异常挂起时，强制结束扫描，避免阻塞节奏
     result_box: dict = {}
 
     def _scan():
@@ -73,16 +137,7 @@ def main():
     print(msg)
     print("\n[SUMMARY]", result["summary"])
 
-    webhook = os.environ.get("FEISHU_WEBHOOK_URL", "")
-    if not webhook:
-        print("⚠️ 未配置 FEISHU_WEBHOOK_URL，跳过推送")
-        return
-    import requests
-    try:
-        resp = requests.post(webhook, json={"msg_type": "text", "content": {"text": msg}}, timeout=8)
-        print(f"✅ 飞书推送完成，HTTP {resp.status_code}")
-    except Exception as e:
-        print(f"❌ 飞书推送失败: {e}")
+    _send_text(msg)
 
 
 if __name__ == "__main__":

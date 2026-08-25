@@ -1,12 +1,9 @@
 # -*- coding: utf-8 -*-
-# 盘前报告推送：仅保留 09:15 盘前（盘中扫描由 strategy-push.yml 负责）
-# 北京时间 09:15 → UTC 01:15
+# 盘前报告推送：已停用定时（盘前报告并入 strategy_cloud_deploy.yml 9:15 档，
+# 见 scripts/v43_push.py REPORT_MODE=premarket）。本工作流保留手动触发兜底。
 name: Morning & Noon Report Push
 
 on:
-  schedule:
-    # 盘前报告 (北京时间 09:15 → UTC 01:15)
-    - cron: '15 1 * * 1-5'
   workflow_dispatch:
 
 jobs:
