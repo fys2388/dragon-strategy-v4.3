@@ -79,10 +79,12 @@ def resolve_report_mode(now: datetime) -> str:
     """
     mode = os.environ.get("REPORT_MODE", "").strip().lower()
     if mode == "premarket":
-        # 守卫：盘前档若被 GitHub 延迟到 9:45 之后才运行，跳过推送，
-        # 避免迟到盘前报告与盘中实时报告撞车（用户投诉的场景）。
+        # 守卫（仅定时触发时生效）：9:15 档若被 GitHub 延迟到 9:45 之后才运行，
+        # 跳过推送，避免迟到盘前报告与盘中实时报告撞车（用户投诉的场景）。
+        # 手动触发（TRIGGER=workflow_dispatch）不受守卫限制，可随时验证/兜底。
+        trigger = os.environ.get("TRIGGER", "").strip()
         hm = now.hour * 100 + now.minute
-        if hm >= 945:
+        if trigger == "schedule" and hm >= 945:
             print(f"⏰ 盘前档被延迟到 {now.strftime('%H:%M')}，已过盘前窗口，跳过（避免与盘中重复）")
             return "skip"
         return "premarket"

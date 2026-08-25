@@ -61,6 +61,8 @@ jobs:
           # github.event.schedule 是触发本次运行的 cron 表达式（workflow_dispatch 时为 null）。
           # 手动触发时 REPORT_MODE 优先生效（report_mode 输入，默认 auto 走档位规则）。
           REPORT_MODE: ${{ (inputs.report_mode || 'auto') != 'auto' && inputs.report_mode || (github.event.schedule == '15 1 * * 1-5' && 'premarket' || 'scan') }}
+          # 触发来源：schedule=定时档（盘前守卫生效），workflow_dispatch=手动（不受守卫限制）
+          TRIGGER: ${{ github.event_name }}
         run: |
           python scripts/v43_push.py
 
