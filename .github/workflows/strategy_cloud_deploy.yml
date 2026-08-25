@@ -25,6 +25,14 @@ on:
         description: '启用测试模式（跳过交易时段检查）'
         type: boolean
         default: false
+      report_mode:
+        description: '手动指定报告类型（premarket=盘前报告 / scan=盘中扫描，留空自动）'
+        type: choice
+        options:
+          - auto
+          - premarket
+          - scan
+        default: auto
 
 jobs:
   run-strategy-push:
@@ -50,8 +58,9 @@ jobs:
           IS_CLOUD: "true"
           TEST_MODE: ${{ inputs.test_mode || 'false' }}
           # 按触发档位决定报告类型：9:15 档发盘前报告，其余档发盘中实时扫描。
-          # github.event.schedule 是触发本次运行的 cron 表达式（workflow_dispatch 时为 null → scan）。
-          REPORT_MODE: ${{ github.event.schedule == '15 1 * * 1-5' && 'premarket' || 'scan' }}
+          # github.event.schedule 是触发本次运行的 cron 表达式（workflow_dispatch 时为 null）。
+          # 手动触发时 REPORT_MODE 优先生效（report_mode 输入，默认 auto 走档位规则）。
+          REPORT_MODE: ${{ (inputs.report_mode || 'auto') != 'auto' && inputs.report_mode || (github.event.schedule == '15 1 * * 1-5' && 'premarket' || 'scan') }}
         run: |
           python scripts/v43_push.py
 
