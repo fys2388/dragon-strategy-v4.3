@@ -177,7 +177,7 @@ def build_premarket_report() -> str:
     lines += _portfolio_section()
     lines.append("")
     lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    lines.append("⏰ 开盘前参考，9:30 后策略盘中每5分钟自动扫描")
+    lines.append("⏰ 开盘前参考，9:30 后策略盘中每10分钟自动扫描")
     lines.append("⚠️ 仅为策略信号，不构成投资建议")
     return "\n".join(lines)
 
