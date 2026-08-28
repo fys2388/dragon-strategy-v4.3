@@ -395,6 +395,10 @@ class Scanner:
         top_rejects = [r for r, _ in reject_reasons.most_common(3)]
 
         # 4. 多周期信号分析（并发 + 0.3s 间隔限速）
+        # 海外IP拉K线慢，硬过滤后按成交额降序只取前200只，避免8分钟超时
+        passed_sorted = sorted(passed, key=lambda s: float(s.get("amount_yi", 0) or 0), reverse=True)
+        analyze_pool = passed_sorted[:200]
+        LOG.info(f"多周期分析标的：硬过滤{len(passed)}只 → 按成交额取前{len(analyze_pool)}只")
         entries: List[Dict] = []
         avoid_count = 0
         tf_stats = Counter()
@@ -405,7 +409,7 @@ class Scanner:
             return self.engine.analyze_stock(stock["code"], stock["name"], stock["price"])
 
         with ThreadPoolExecutor(max_workers=12) as pool:
-            futs = [pool.submit(analyze, s) for s in passed]
+            futs = [pool.submit(analyze, s) for s in analyze_pool]
             for fut in as_completed(futs):
                 try:
                     sig = fut.result()
@@ -465,14 +469,19 @@ def build_message(result: Dict) -> str:
     lines = [f"📊 MACD多周期共振策略 盘中实时 {now}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"]
 
     lines.append("【大盘环境】")
-    lines.append(f"大盘评分：{result['market_score']:.1f}/7分 | {'🟢可开仓' if result['can_open'] else '🔴观望'}")
-    for line in result["market_desc"].split("\n")[:5]:
-        lines.append(f"  {line}")
+    score = result.get("market_score", 0.0)
+    can_open = result.get("can_open", False)
+    lines.append(f"大盘评分：{score:.1f}/7分 | {'🟢可开仓' if can_open else '🔴观望'}")
+    market_desc = result.get("market_desc", "")
+    for line in market_desc.split("\n")[:5]:
+        if line.strip():
+            lines.append(f"  {line}")
     lines.append("")
 
     lines.append("【重点推荐（多周期共振）】")
-    if result["entries"]:
-        for i, e in enumerate(result["entries"], 1):
+    entries = result.get("entries", [])
+    if entries:
+        for i, e in enumerate(entries, 1):
             levels = "+".join(e.get("resonance_levels", []))
             lines.append(f"{i}. {e['name']}({e['code']}) | 现价{e['price']}元")
             lines.append(f"   共振级别：{levels} | 得分{e['score']}")
