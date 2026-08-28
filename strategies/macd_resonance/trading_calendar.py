@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """交易时段判断（北京时间）。
 
-支持时区：Asia/Shanghai（使用 zoneinfo，Python 3.9+）
+时区：UTC+8 固定偏移（使用标准库 timezone，不依赖系统 tzdata，跨平台一致）
 交易时段：
   - 盘前：09:00-09:30（允许盘前扫描）
   - 上午：09:30-11:30
@@ -12,23 +12,11 @@
 """
 from __future__ import annotations
 
-import sys
-from datetime import datetime, time, timedelta
+from datetime import datetime, time, timedelta, timezone
 from typing import Optional
 
-# Python 3.9+ 使用 zoneinfo，否则回退到固定偏移
-if sys.platform == "win32":
-    try:
-        from zoneinfo import ZoneInfo
-        BJT = ZoneInfo("Asia/Shanghai")
-    except ImportError:
-        BJT = timedelta(hours=8)
-else:
-    try:
-        from zoneinfo import ZoneInfo
-        BJT = ZoneInfo("Asia/Shanghai")
-    except ImportError:
-        BJT = timedelta(hours=8)
+# 北京时间固定 UTC+8，使用标准库 timezone（不依赖系统 tzdata，跨平台一致）
+BJT = timezone(timedelta(hours=8))
 
 # 交易时段定义
 _MORNING_START = time(9, 0)    # 盘前开始（允许扫描）

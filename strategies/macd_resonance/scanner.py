@@ -59,7 +59,7 @@ def setup_logger() -> logging.Logger:
     fmt = _BJTFormatter("%(asctime)s %(levelname)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
     try:
         os.makedirs(LOG_DIR, exist_ok=True)
-        fh = logging.FileHandler(os.path.join(LOG_DIR, f"scanner_{datetime.now().strftime('%Y%m%d')}.log"),
+        fh = logging.FileHandler(os.path.join(LOG_DIR, f"scanner_{now_bjt().strftime('%Y%m%d')}.log"),
                                  encoding="utf-8")
         fh.setFormatter(fmt)
         logger.addHandler(fh)
