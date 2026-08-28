@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # 本机定时运行脚本（Windows PowerShell 版）
-# 用法：powershell.exe -ExecutionPolicy Bypass -File "C:\path\to\run_local.ps1"
-# 推荐用「任务计划程序」在交易日盘中按计划触发（见 README_LOCAL_RUN.md）
+# 用法：powershell.exe -ExecutionPolicy Bypass -File "E:\AI\策略\dragon-strategy-v4.3\scripts\run_local.ps1"
+# 推荐用「任务计划程序」在交易日按计划触发（见 README_LOCAL_RUN.md）
 # ============================================================
 param(
-    [string]$RepoDir = "E:\AI\策略\dragon-strategy-v4.3",   # 仓库路径
-    [string]$Python = "python",                              # Python 命令（可指向 venv）
-    [string]$Source = "auto",                                # auto/eastmoney/akshare
-    [switch]$SkipPull                                       # 跳过 git pull
+    [string]$RepoDir = "E:\AI\策略\dragon-strategy-v4.3",
+    [string]$Python = "python",
+    [string]$Source = "auto",
+    [switch]$SkipPull
 )
 
 $ErrorActionPreference = "Continue"
@@ -39,6 +39,7 @@ if (-not $SkipPull) {
 # 2. 运行策略扫描（含飞书推送）
 Push-Location $RepoDir
 try {
+    $env:PYTHONIOENCODING = "utf-8"
     $out = & $Python -m strategies.macd_resonance.scanner --push --source $Source 2>&1
     $out | ForEach-Object { Write-Log "scanner: $_" }
     Write-Log "==== 扫描结束，退出码 $LASTEXITCODE ===="

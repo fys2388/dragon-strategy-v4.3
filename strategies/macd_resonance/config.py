@@ -1,5 +1,13 @@
 # -*- coding: utf-8 -*-
-"""MACD 多周期共振策略 V1.0 — 集中配置。
+"""MACD 多周期共振策略 V2.0 — 集中配置。
+
+V2.0 阶段一优化：
+- 大盘开仓阈值降至 3 分（宽松档）
+- 量比阈值降至 1.1
+- 15 分钟仅需金叉（不要求上穿零轴）
+- 30 分钟仅需金叉（不要求 DIF>0）
+- 取消价格突破强制要求
+- 新增 standard / relaxed 双模式，按大盘评分自动切换
 
 所有策略参数、风控参数、数据源参数统一在此维护。
 """
@@ -35,7 +43,8 @@ HARD_FILTERS = {
 # 大盘门控（7 分制）
 # ============================================================
 MARKET_GATE = {
-    "open_threshold": 4.0,   # ≥4 允许开仓
+    "open_threshold": 3.0,   # ≥3 允许开仓（宽松档），≥4 为标准档
+    "standard_threshold": 4.0,  # ≥4 使用标准档严格信号
     "total_score": 7.0,
 }
 
@@ -44,9 +53,22 @@ MARKET_GATE = {
 # ============================================================
 SIGNAL = {
     "daily_dif_floor": -ZERO_AXIS_EPS,     # 日线 DIF 不得低于该值
-    "volume_ratio_min": 1.3,               # 量能确认：当日量 ≥ 前5日均量 × 1.3
-    "breakout_lookback_60m": 20,           # 突破确认：近20根60分钟K线最高价
+    "volume_ratio_min": 1.1,               # 量能确认：当日量 ≥ 前5日均量 × 1.1（V2.0放宽）
+    "breakout_lookback_60m": 20,           # 突破确认：近20根60分钟K线最高价（V2.0宽松档不强制）
     "cooldown_hours": 6,                   # 同一标的推送冷却期（小时）
+    # V2.0 双模式：standard(大盘≥4分) / relaxed(大盘3分)
+    "mode_standard": {
+        "tf30_require_dif_above_zero": True,   # 30分钟要求DIF>0
+        "tf15_require_cross_zero": True,       # 15分钟要求上穿零轴
+        "require_breakout": True,              # 要求价格突破
+        "volume_ratio_min": 1.2,                # 标准档量比1.2
+    },
+    "mode_relaxed": {
+        "tf30_require_dif_above_zero": False,  # 30分钟仅需金叉
+        "tf15_require_cross_zero": False,      # 15分钟仅需金叉
+        "require_breakout": False,             # 不要求突破
+        "volume_ratio_min": 1.1,                # 宽松档量比1.1
+    },
 }
 
 # ============================================================

@@ -36,7 +36,7 @@ LOCK = threading.Lock()
 # ============================================================
 LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "logs")
 HISTORY_FILE = os.path.join(os.path.dirname(LOG_DIR), "data", "strategy_history.jsonl")
-MIN_POOL_SIZE = 100  # 选股池最小数量（正常 A 股 5000+ 只）
+MIN_POOL_SIZE = 1000  # 选股池最小数量（正常 A 股 5000+ 只，<1000 视为接口异常）
 
 
 class _BJTFormatter(logging.Formatter):

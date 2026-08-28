@@ -17,7 +17,7 @@ from typing import Dict, List, Optional
 import pandas as pd
 
 from . import data_source as ds
-from .config import RISK, SIGNAL, TIMEFRAME_ORDER, ZERO_AXIS_EPS
+from .config import RISK, SIGNAL, TIMEFRAME_ORDER, ZERO_AXIS_EPS, MARKET_GATE
 from .trading_calendar import now_bjt
 
 from .macd_indicator import (above_zero_axis, below_zero_axis, calc_macd,
@@ -108,9 +108,28 @@ class SignalEngine:
     # ----------------------------------------------------------
     # 入场信号
     # ----------------------------------------------------------
-    def check_long_entry(self, code: str, name: str, price: float) -> Optional[SignalResult]:
-        """检查做多入场条件（C~H，A/B 由 scanner 前置保证）。"""
+    def check_long_entry(self, code: str, name: str, price: float,
+                         mode: str = "auto") -> Optional[SignalResult]:
+        """检查做多入场条件（C~H，A/B 由 scanner 前置保证）。
+
+        V2.0 双模式：
+        - mode="standard"（大盘≥4分）：严格版，30min要求DIF>0、15min要求上穿零轴、要求价格突破、量比1.2
+        - mode="relaxed"（大盘3分）：宽松版，30min仅需金叉、15min仅需金叉、不要求突破、量比1.1
+        - mode="auto"：根据当前大盘评分自动选择
+        """
+        # 自动选择模式
+        if mode == "auto":
+            try:
+                from .market_gate import get_market_score
+                score, _, _ = get_market_score()
+                mode = "standard" if score >= MARKET_GATE["standard_threshold"] else "relaxed"
+            except Exception:
+                mode = "relaxed"  # 获取失败时默认宽松，避免错过信号
+
+        mode_cfg = SIGNAL["mode_standard"] if mode == "standard" else SIGNAL["mode_relaxed"]
+        vol_min = mode_cfg["volume_ratio_min"]
         reasons = []
+        reasons.append(f"模式:{mode}")
 
         # C. 日线 DIF 在零轴上方或附近
         df_d, dif_d, dea_d, macd_d = self._tf_macd(code, "daily", 120)
@@ -121,7 +140,7 @@ class SignalEngine:
             return None
         reasons.append("日线DIF零轴上方/附近")
 
-        # D. 60分钟：金叉 + DIF>0 + 红柱放大
+        # D. 60分钟：金叉 + DIF>0 + 红柱放大（双模式一致，核心不放松）
         df_60, dif_60, dea_60, macd_60 = self._tf_macd(code, "60m", 200)
         if df_60.empty:
             return None
@@ -131,39 +150,50 @@ class SignalEngine:
             return None
         reasons.append("60min金叉红柱放大")
 
-        # E. 30分钟：金叉 + DIF>0
+        # E. 30分钟：标准档要求DIF>0，宽松档仅需金叉
         df_30, dif_30, dea_30, _ = self._tf_macd(code, "30m", 200)
         if df_30.empty:
             return None
-        if not (is_golden_cross(dif_30, dea_30) and self._last(dif_30) and self._last(dif_30) > 0):
+        if not is_golden_cross(dif_30, dea_30):
             return None
-        reasons.append("30min金叉")
+        if mode_cfg["tf30_require_dif_above_zero"]:
+            if not (self._last(dif_30) and self._last(dif_30) > 0):
+                return None
+            reasons.append("30min金叉零轴上")
+        else:
+            reasons.append("30min金叉")
 
-        # F. 15分钟：金叉 + DIF 上穿零轴
+        # F. 15分钟：标准档要求上穿零轴，宽松档仅需金叉
         df_15, dif_15, dea_15, _ = self._tf_macd(code, "15m", 200)
         if df_15.empty:
             return None
-        if not (is_golden_cross(dif_15, dea_15) and cross_above_zero(dif_15)):
+        if not is_golden_cross(dif_15, dea_15):
             return None
-        reasons.append("15min金叉上穿零轴")
+        if mode_cfg["tf15_require_cross_zero"]:
+            if not cross_above_zero(dif_15):
+                return None
+            reasons.append("15min金叉上穿零轴")
+        else:
+            reasons.append("15min金叉")
 
-        # G. 量能确认：当日成交量 > 前5日均量 × 1.3
+        # G. 量能确认：当日成交量 > 前5日均量 × 模式对应阈值
         if len(df_d) < 6:
             return None
         vol_now = float(df_d["volume"].iloc[-1])
         vol_5d = float(df_d["volume"].iloc[-6:-1].mean())
-        if vol_5d <= 0 or vol_now <= vol_5d * SIGNAL["volume_ratio_min"]:
+        if vol_5d <= 0 or vol_now <= vol_5d * vol_min:
             return None
-        reasons.append(f"量能{vol_now / vol_5d:.1f}倍")
+        reasons.append(f"量能{vol_now / vol_5d:.1f}倍(阈值{vol_min})")
 
-        # H. 价格突破：收盘价 > 近20根60分钟K线最高价
-        if len(df_60) < SIGNAL["breakout_lookback_60m"]:
-            return None
-        close_now = float(df_d["close"].iloc[-1])
-        high_20 = float(df_60["high"].iloc[-SIGNAL["breakout_lookback_60m"]:].max())
-        if close_now <= high_20:
-            return None
-        reasons.append(f"突破60min平台{high_20:.2f}")
+        # H. 价格突破：标准档强制，宽松档跳过
+        if mode_cfg["require_breakout"]:
+            if len(df_60) < SIGNAL["breakout_lookback_60m"]:
+                return None
+            close_now = float(df_d["close"].iloc[-1])
+            high_20 = float(df_60["high"].iloc[-SIGNAL["breakout_lookback_60m"]:].max())
+            if close_now <= high_20:
+                return None
+            reasons.append(f"突破60min平台{high_20:.2f}")
 
         # 共振强度打分：共振周期越多分越高
         score = 1.0
@@ -173,6 +203,8 @@ class SignalEngine:
         if self._last(dif_d) and self._last(dif_d) > ZERO_AXIS_EPS:
             score += 0.5
         score += 0.5 * TIMEFRAME_ORDER.get("60m", 3)
+        if mode == "relaxed":
+            score *= 0.9  # 宽松档信号略降权
 
         return SignalResult(
             code=code, name=name, signal_type=SignalType.LONG_ENTRY, score=round(score, 2),
