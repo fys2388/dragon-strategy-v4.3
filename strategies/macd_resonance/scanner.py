@@ -471,7 +471,7 @@ def build_message(result: Dict) -> str:
     lines.append("【大盘环境】")
     score = result.get("market_score", 0.0)
     can_open = result.get("can_open", False)
-    lines.append(f"大盘评分：{score:.1f}/7分 | {'🟢可开仓' if can_open else '🔴观望'}")
+    lines.append(f"大盘评分：{score:.1f}/7分 | {'🔴可开仓' if can_open else '🟢观望'}")
     market_desc = result.get("market_desc", "")
     for line in market_desc.split("\n")[:5]:
         if line.strip():
