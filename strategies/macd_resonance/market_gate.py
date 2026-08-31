@@ -103,11 +103,11 @@ def get_market_score(market_data: Optional[object] = None) -> Tuple[float, str, 
     can_open = score >= MARKET_GATE["open_threshold"]
     if can_open:
         if score >= MARKET_GATE.get("standard_threshold", 4.0):
-            level = "🟢 可开仓(标准档)"
+            level = "🔴 可开仓(标准档)"
         else:
             level = "🟡 可开仓(宽松档)"
     else:
-        level = "🔴 观望（仅平仓/空仓）"
+        level = "🟢 观望（仅平仓/空仓）"
     description = "\n".join(details) + f"\n▶ 评分 {score:.1f}/{MARKET_GATE['total_score']:.0f} 分 → {level}"
     return score, description, can_open
 
