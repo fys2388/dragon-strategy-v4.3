@@ -3,9 +3,9 @@
 name: Evening Review Push
 
 on:
-  schedule:
-    # 收盘复盘 (北京时间 15:30 → UTC 07:30)
-    - cron: '30 7 * * 1-5'
+  # schedule 已禁用：GitHub Actions cron 严重延迟，复盘被拖到半夜。改由外部调度器触发。
+  # schedule:
+  #   - cron: '30 7 * * 1-5'
   workflow_dispatch:
 
 jobs:

@@ -10,15 +10,13 @@ name: V1.0 MACD多周期共振策略云推送
 run-name: "云端策略推送 @ ${{ github.actor }}"
 
 on:
-  schedule:
-    # 盘前 9:15 北京时间 = 1:15 UTC
-    - cron: '15 1 * * 1-5'
-    # 盘中上午 每30分钟（UTC 2:00-3:30 = 北京 10:00-11:30；省配额，原每10分钟超支）
-    - cron: '0,30 2-3 * * 1-5'
-    # 盘中下午 每30分钟（UTC 5:00-6:30 = 北京 13:00-14:30；尾盘14:50单独触发）
-    - cron: '0,30 5-6 * * 1-5'
-    # 尾盘完整版 14:50 北京时间 = 6:50 UTC
-    - cron: '50 6 * * 1-5'
+  # schedule 已禁用：GitHub Actions cron 严重延迟（5-12小时），交易时段的推送被拖到半夜执行。
+  # 改由外部可靠调度器（Cloudflare Worker Cron / 扣子定时触发）调用 workflow_dispatch。
+  # schedule:
+  #   - cron: '15 1 * * 1-5'
+  #   - cron: '0,30 2-3 * * 1-5'
+  #   - cron: '0,30 5-6 * * 1-5'
+  #   - cron: '50 6 * * 1-5'
   workflow_dispatch:
     inputs:
       test_mode:
