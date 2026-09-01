@@ -3,7 +3,7 @@
 
 classify_regime(market_data) -> str：
 - "strong_trend"  强趋势：涨停>80 且 跌停<5
-- "weak_trend"    弱趋势：涨停30-80 且 跌停<10
+- "weak_trend"    偏强：涨停30-80 且 跌停<10
 - "range_bound"   震荡：涨停10-30
 - "extreme"       极端：跌停>20 或 指数涨跌>3%
 判定优先级：extreme > strong_trend > weak_trend > range_bound
@@ -16,7 +16,7 @@ from .data_validator import MarketData
 
 REGIME_LABELS = {
     "strong_trend": "强势",
-    "weak_trend": "弱势",
+    "weak_trend": "偏强",
     "range_bound": "震荡",
     "extreme": "极端",
 }
