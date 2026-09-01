@@ -428,6 +428,47 @@ def _get_sina_indices() -> Dict[str, Dict]:
         return {}
 
 
+def _get_em_limit_pool_count() -> tuple[int, int]:
+    """东财官方涨跌停池 API（push2ex），返回(涨停家数, 跌停家数)。
+
+    该接口在海外 IP 下比 push2 主域更可达，数据为官方涨跌停池口径，
+    比新浪按 changepercent≥9.9% 粗筛更准确（自动区分 ST 5%/主板10%/双创20%）。
+    """
+    from datetime import datetime
+    date = datetime.now().strftime("%Y%m%d")
+    params = {
+        "ut": "7eea3edcaed734bea9cbfc24409ed989",
+        "dpt": "wz.ztzt",
+        "Pageindex": 0,
+        "pagesize": 1000,
+        "sort": "fbt:asc",
+        "date": date,
+    }
+    headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://quote.eastmoney.com/"}
+    up = down = 0
+    try:
+        # 涨停池
+        resp = requests.get("https://push2ex.eastmoney.com/getTopicZTPool",
+                            params=params, headers=headers, timeout=8)
+        if resp.status_code == 200:
+            pool = resp.json().get("data", {}).get("pool", [])
+            up = len(pool)
+        # 跌停池
+        resp2 = requests.get("https://push2ex.eastmoney.com/getTopicDTPool",
+                             params=params, headers=headers, timeout=8)
+        if resp2.status_code == 200:
+            pool2 = resp2.json().get("data", {}).get("pool", [])
+            down = len(pool2)
+        if up > 0 or down > 0:
+            print(f"[data_source] 东财涨跌停池: 涨停{up} 跌停{down}")
+            return up, down
+        print("[data_source] 东财涨跌停池返回空，可能非交易时段")
+        return 0, 0
+    except Exception as e:
+        print(f"[data_source] 东财涨跌停池失败: {e}")
+        return 0, 0
+
+
 def _get_sina_limit_count() -> tuple[int, int]:
     """备用涨停/跌停统计：新浪全A列表（东财不可达时使用）。"""
     up = down = 0
@@ -667,16 +708,23 @@ LIMIT_DOWN_THRESHOLD = -9.9
 def get_limit_up_down_count() -> tuple[int, int]:
     """动态统计沪深A股涨停/跌停家数。
 
-    方法：调用东财沪深A股列表接口，遍历全部股票按 f3 涨幅统计：
-    - f3 ≥ 9.9 → 涨停（近似，ST 股 5% 涨停不计入）
-    - f3 ≤ -9.9 → 跌停
-    注意：东财 f3 单位为百分比（10.0 表示 10%），无需再除 100。
+    优先级：东财官方涨跌停池 API（push2ex，口径最准）→ 东财全A列表遍历 → 新浪备用源。
+    云端和本地统一走涨跌停池优先，避免云端新浪粗筛导致数据偏差。
 
     Returns:
-        (涨停家数, 跌停家数)；接口失败返回 (0, 0) 并打印错误日志，不崩溃。
+        (涨停家数, 跌停家数)；全部失败返回 (0, 0) 并打印错误日志，不崩溃。
     """
+    # 1. 优先东财官方涨跌停池（口径最准，海外IP相对可达）
+    pool_count = _get_em_limit_pool_count()
+    if pool_count != (0, 0):
+        return pool_count
+
+    # 2. 云端模式：涨跌停池失败后直接回退新浪（避免东财主域超时拖慢）
     if _IS_CLOUD:
+        print("[get_limit_up_down_count] 云端涨跌停池不可用，切换新浪备用源")
         return _get_sina_limit_count()
+
+    # 3. 本地模式：东财全A列表遍历统计
     params = {
         "pn": 1, "pz": 6000, "po": 1, "np": 1, "ut": _UT,
         "fltt": 2, "invt": 2, "fid": "f3",
