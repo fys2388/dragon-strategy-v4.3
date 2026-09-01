@@ -20,6 +20,7 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from strategies.macd_resonance.scanner import Scanner, build_message  # noqa: E402
+from strategies.macd_resonance.oversold_rebound import OversoldReboundScanner, build_oversold_message  # noqa: E402
 from strategies.macd_resonance.trading_calendar import is_trading_time, now_bjt  # noqa: E402
 
 SCAN_TIMEOUT_S = 480  # 扫描硬超时（秒）：数据源异常挂起时兜底
@@ -140,6 +141,36 @@ def main():
     print("\n[SUMMARY]", result["summary"])
 
     _send_text(msg)
+
+    # ===== 超跌反弹模式（并行第二策略）=====
+    try:
+        print("\n" + "=" * 50)
+        print("🚀 开始超跌反弹模式扫描...")
+        oversold_scanner = OversoldReboundScanner()
+        oversold_box: dict = {}
+
+        def _oversold_scan():
+            oversold_box["r"] = oversold_scanner.run(need_push=True, max_stocks=SCAN_MAX_STOCKS)
+
+        t2 = threading.Thread(target=_oversold_scan, daemon=True)
+        t2.start()
+        t2.join(timeout=SCAN_TIMEOUT_S)
+        if t2.is_alive():
+            print(f"⏰ 超跌反弹扫描超过 {SCAN_TIMEOUT_S}s 超时")
+            oversold_result = {"summary": "超跌反弹扫描超时", "diagnosis": "", "scan_elapsed": 0, "entries": []}
+        else:
+            oversold_result = oversold_box.get("r", {"summary": "超跌反弹扫描无结果"})
+
+        oversold_msg = build_oversold_message(oversold_result)
+        print(oversold_msg)
+        print("\n[OVERSOLD SUMMARY]", oversold_result.get("summary", ""))
+        _send_text(oversold_msg)
+    except Exception as e:
+        print(f"❌ 超跌反弹扫描异常: {e}")
+        try:
+            send_feishu_alert(f"超跌反弹模式异常: {e}", "策略异常")
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
