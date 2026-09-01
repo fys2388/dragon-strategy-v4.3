@@ -31,6 +31,20 @@ class OversoldReboundScanner:
         self.base_dir = ds.os.path.dirname(ds.os.path.dirname(ds.os.path.dirname(ds.os.path.abspath(__file__))))
         self.cache_file = ds.os.path.join(self.base_dir, "data", "oversold_cache.json")
         self.cache = self._load_cache()
+        self.quality_pool = self._load_quality_pool()
+
+    def _load_quality_pool(self) -> set:
+        pool_file = ds.os.path.join(self.base_dir, "data", "quality_pool.json")
+        try:
+            import json
+            with open(pool_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            codes = {item["code"] for item in data if "code" in item}
+            LOG.info(f"[超跌反弹] 优质股票池加载成功：{len(codes)}只")
+            return codes
+        except Exception as e:
+            LOG.warning(f"[超跌反弹] 优质股票池加载失败，使用全市场扫描: {e}")
+            return set()
 
     def _load_cache(self) -> Dict:
         try:
@@ -128,12 +142,15 @@ class OversoldReboundScanner:
         return stock
 
     def _quick_filter(self, stock: dict) -> bool:
-        """初筛：价格、市值、非ST、主板。"""
+        """初筛：价格、市值、非ST、主板、优质股票池。"""
         name = str(stock.get("name", ""))
         if "ST" in name.upper() or "退" in name:
             return False
         code = str(stock.get("code", ""))
         if not code.startswith(("60", "00")):
+            return False
+        # 优质股票池过滤（基本面预筛选）
+        if self.quality_pool and code not in self.quality_pool:
             return False
         price = float(stock.get("price", 0) or 0)
         cap = float(stock.get("float_cap_yi", 0) or 0)

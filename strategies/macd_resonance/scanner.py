@@ -92,6 +92,19 @@ class Scanner:
         self.base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         self.cache_file = os.path.join(self.base_dir, "data", "signal_cache.json")
         self.cache = self._load_cache()
+        self.quality_pool = self._load_quality_pool()
+
+    def _load_quality_pool(self) -> set:
+        pool_file = os.path.join(self.base_dir, "data", "quality_pool.json")
+        try:
+            with open(pool_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            codes = {item["code"] for item in data if "code" in item}
+            LOG.info(f"优质股票池加载成功：{len(codes)}只")
+            return codes
+        except Exception as e:
+            LOG.warning(f"优质股票池加载失败，使用全市场扫描: {e}")
+            return set()
 
     # ----------------------------------------------------------
     # 信号去重（冷却期）
@@ -183,6 +196,10 @@ class Scanner:
     def _quick_filter(self, stock: dict) -> bool:
         name = str(stock.get("name", ""))
         if "ST" in name.upper() or "退" in name:
+            return False
+        # 优质股票池过滤（基本面预筛选）
+        code = str(stock.get("code", ""))
+        if self.quality_pool and code not in self.quality_pool:
             return False
         price = float(stock.get("price", 0) or 0)
         cap = float(stock.get("float_cap_yi", 0) or 0)

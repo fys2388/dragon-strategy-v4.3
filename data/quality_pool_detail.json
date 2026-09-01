@@ -1,0 +1,1429 @@
+[
+  {
+    "name": "盛新锂能",
+    "code": "002240",
+    "mcap_yi": 298.6,
+    "pe": 30.9,
+    "sectors": [
+      "new_energy",
+      "consumer"
+    ]
+  },
+  {
+    "name": "均胜电子",
+    "code": "600699",
+    "mcap_yi": 297.1,
+    "pe": 21.7,
+    "sectors": [
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "伟明环保",
+    "code": "603568",
+    "mcap_yi": 296.2,
+    "pe": 17.2,
+    "sectors": [
+      "new_energy",
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "浙江鼎力",
+    "code": "603338",
+    "mcap_yi": 291.6,
+    "pe": 15.9,
+    "sectors": [
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "新泉股份",
+    "code": "603179",
+    "mcap_yi": 291.1,
+    "pe": 36.1,
+    "sectors": [
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "国恩股份",
+    "code": "002768",
+    "mcap_yi": 290.9,
+    "pe": 25.3,
+    "sectors": [
+      "new_energy"
+    ]
+  },
+  {
+    "name": "南钢股份",
+    "code": "600282",
+    "mcap_yi": 289.8,
+    "pe": 10.6,
+    "sectors": [
+      "ai"
+    ]
+  },
+  {
+    "name": "盈峰环境",
+    "code": "000967",
+    "mcap_yi": 288.6,
+    "pe": 44.8,
+    "sectors": [
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "东方明珠",
+    "code": "600637",
+    "mcap_yi": 286.4,
+    "pe": 41.2,
+    "sectors": [
+      "ai"
+    ]
+  },
+  {
+    "name": "华正新材",
+    "code": "603186",
+    "mcap_yi": 286.1,
+    "pe": 70.3,
+    "sectors": [
+      "new_energy"
+    ]
+  },
+  {
+    "name": "海澜之家",
+    "code": "600398",
+    "mcap_yi": 285.8,
+    "pe": 13.8,
+    "sectors": [
+      "consumer"
+    ]
+  },
+  {
+    "name": "北部湾港",
+    "code": "000582",
+    "mcap_yi": 282.7,
+    "pe": 26.5,
+    "sectors": [
+      "ai"
+    ]
+  },
+  {
+    "name": "中鼎股份",
+    "code": "000887",
+    "mcap_yi": 281.3,
+    "pe": 19.4,
+    "sectors": [
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "东方电缆",
+    "code": "603606",
+    "mcap_yi": 279.0,
+    "pe": 20.5,
+    "sectors": [
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "达仁堂",
+    "code": "600329",
+    "mcap_yi": 277.5,
+    "pe": 32.7,
+    "sectors": [
+      "medical"
+    ]
+  },
+  {
+    "name": "海油工程",
+    "code": "600583",
+    "mcap_yi": 272.4,
+    "pe": 13.1,
+    "sectors": [
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "平高电气",
+    "code": "600312",
+    "mcap_yi": 269.6,
+    "pe": 21.2,
+    "sectors": [
+      "ai",
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "科达制造",
+    "code": "600499",
+    "mcap_yi": 269.5,
+    "pe": 14.6,
+    "sectors": [
+      "new_energy",
+      "consumer",
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "振华股份",
+    "code": "603067",
+    "mcap_yi": 269.0,
+    "pe": 40.2,
+    "sectors": [
+      "new_energy"
+    ]
+  },
+  {
+    "name": "杭氧股份",
+    "code": "002430",
+    "mcap_yi": 268.9,
+    "pe": 26.0,
+    "sectors": [
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "联泓新科",
+    "code": "003022",
+    "mcap_yi": 268.7,
+    "pe": 47.0,
+    "sectors": [
+      "new_energy",
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "江苏国信",
+    "code": "002608",
+    "mcap_yi": 268.6,
+    "pe": 9.2,
+    "sectors": [
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "山子高科",
+    "code": "000981",
+    "mcap_yi": 267.9,
+    "pe": 31.9,
+    "sectors": [
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "杉杉股份",
+    "code": "600884",
+    "mcap_yi": 267.7,
+    "pe": 24.9,
+    "sectors": [
+      "new_energy",
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "智微智能",
+    "code": "001339",
+    "mcap_yi": 266.3,
+    "pe": 58.2,
+    "sectors": [
+      "ai"
+    ]
+  },
+  {
+    "name": "以岭药业",
+    "code": "002603",
+    "mcap_yi": 266.1,
+    "pe": 19.4,
+    "sectors": [
+      "medical"
+    ]
+  },
+  {
+    "name": "大金重工",
+    "code": "002487",
+    "mcap_yi": 260.9,
+    "pe": 22.5,
+    "sectors": [
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "鱼跃医疗",
+    "code": "002223",
+    "mcap_yi": 260.4,
+    "pe": 23.2,
+    "sectors": [
+      "medical"
+    ]
+  },
+  {
+    "name": "协鑫能科",
+    "code": "002015",
+    "mcap_yi": 257.1,
+    "pe": 59.4,
+    "sectors": [
+      "new_energy"
+    ]
+  },
+  {
+    "name": "深圳华强",
+    "code": "000062",
+    "mcap_yi": 256.8,
+    "pe": 41.5,
+    "sectors": [
+      "consumer"
+    ]
+  },
+  {
+    "name": "物产中大",
+    "code": "600704",
+    "mcap_yi": 256.5,
+    "pe": 7.2,
+    "sectors": [
+      "consumer"
+    ]
+  },
+  {
+    "name": "浙富控股",
+    "code": "002266",
+    "mcap_yi": 255.2,
+    "pe": 13.4,
+    "sectors": [
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "中创智领",
+    "code": "601717",
+    "mcap_yi": 254.1,
+    "pe": 7.5,
+    "sectors": [
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "伯特利",
+    "code": "603596",
+    "mcap_yi": 252.0,
+    "pe": 17.6,
+    "sectors": [
+      "ai",
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "普洛药业",
+    "code": "000739",
+    "mcap_yi": 251.2,
+    "pe": 29.6,
+    "sectors": [
+      "medical"
+    ]
+  },
+  {
+    "name": "中国重汽",
+    "code": "000951",
+    "mcap_yi": 250.4,
+    "pe": 12.7,
+    "sectors": [
+      "consumer"
+    ]
+  },
+  {
+    "name": "移远通信",
+    "code": "603236",
+    "mcap_yi": 249.9,
+    "pe": 25.8,
+    "sectors": [
+      "ai"
+    ]
+  },
+  {
+    "name": "中航高科",
+    "code": "600862",
+    "mcap_yi": 249.9,
+    "pe": 28.9,
+    "sectors": [
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "安井食品",
+    "code": "603345",
+    "mcap_yi": 249.7,
+    "pe": 16.6,
+    "sectors": [
+      "consumer"
+    ]
+  },
+  {
+    "name": "永兴材料",
+    "code": "002756",
+    "mcap_yi": 249.1,
+    "pe": 20.4,
+    "sectors": [
+      "new_energy"
+    ]
+  },
+  {
+    "name": "神州数码",
+    "code": "000034",
+    "mcap_yi": 246.1,
+    "pe": 41.5,
+    "sectors": [
+      "ai",
+      "consumer"
+    ]
+  },
+  {
+    "name": "新洁能",
+    "code": "605111",
+    "mcap_yi": 245.8,
+    "pe": 62.7,
+    "sectors": [
+      "semi"
+    ]
+  },
+  {
+    "name": "九州通",
+    "code": "600998",
+    "mcap_yi": 244.1,
+    "pe": 12.1,
+    "sectors": [
+      "ai",
+      "medical"
+    ]
+  },
+  {
+    "name": "浙江荣泰",
+    "code": "603119",
+    "mcap_yi": 242.7,
+    "pe": 79.5,
+    "sectors": [
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "汇顶科技",
+    "code": "603160",
+    "mcap_yi": 241.4,
+    "pe": 36.7,
+    "sectors": [
+      "semi",
+      "ai"
+    ]
+  },
+  {
+    "name": "广电运通",
+    "code": "002152",
+    "mcap_yi": 241.4,
+    "pe": 29.5,
+    "sectors": [
+      "ai"
+    ]
+  },
+  {
+    "name": "华海药业",
+    "code": "600521",
+    "mcap_yi": 241.2,
+    "pe": 38.4,
+    "sectors": [
+      "medical"
+    ]
+  },
+  {
+    "name": "沃尔核材",
+    "code": "002130",
+    "mcap_yi": 239.7,
+    "pe": 20.8,
+    "sectors": [
+      "new_energy"
+    ]
+  },
+  {
+    "name": "珀莱雅",
+    "code": "603605",
+    "mcap_yi": 238.9,
+    "pe": 12.8,
+    "sectors": [
+      "consumer"
+    ]
+  },
+  {
+    "name": "华兰生物",
+    "code": "002007",
+    "mcap_yi": 238.8,
+    "pe": 29.6,
+    "sectors": [
+      "medical"
+    ]
+  },
+  {
+    "name": "济川药业",
+    "code": "600566",
+    "mcap_yi": 238.5,
+    "pe": 13.0,
+    "sectors": [
+      "medical",
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "福莱特",
+    "code": "601865",
+    "mcap_yi": 235.0,
+    "pe": 65.9,
+    "sectors": [
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "丽珠集团",
+    "code": "000513",
+    "mcap_yi": 234.5,
+    "pe": 14.0,
+    "sectors": [
+      "medical"
+    ]
+  },
+  {
+    "name": "金田股份",
+    "code": "601609",
+    "mcap_yi": 233.2,
+    "pe": 28.4,
+    "sectors": [
+      "ai"
+    ]
+  },
+  {
+    "name": "科华数据",
+    "code": "002335",
+    "mcap_yi": 232.5,
+    "pe": 40.7,
+    "sectors": [
+      "new_energy",
+      "ai",
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "川能动力",
+    "code": "000155",
+    "mcap_yi": 231.9,
+    "pe": 25.7,
+    "sectors": [
+      "new_energy"
+    ]
+  },
+  {
+    "name": "紫金龙净",
+    "code": "600388",
+    "mcap_yi": 230.6,
+    "pe": 18.9,
+    "sectors": [
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "国机重装",
+    "code": "601399",
+    "mcap_yi": 230.1,
+    "pe": 47.6,
+    "sectors": [
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "哈药股份",
+    "code": "600664",
+    "mcap_yi": 229.7,
+    "pe": 44.8,
+    "sectors": [
+      "medical"
+    ]
+  },
+  {
+    "name": "福田汽车",
+    "code": "600166",
+    "mcap_yi": 229.6,
+    "pe": 15.4,
+    "sectors": [
+      "new_energy",
+      "consumer"
+    ]
+  },
+  {
+    "name": "振华科技",
+    "code": "000733",
+    "mcap_yi": 229.3,
+    "pe": 23.9,
+    "sectors": [
+      "new_energy",
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "中粮资本",
+    "code": "002423",
+    "mcap_yi": 226.7,
+    "pe": 18.9,
+    "sectors": [
+      "ai",
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "东华软件",
+    "code": "002065",
+    "mcap_yi": 226.3,
+    "pe": 49.6,
+    "sectors": [
+      "ai"
+    ]
+  },
+  {
+    "name": "中直股份",
+    "code": "600038",
+    "mcap_yi": 225.6,
+    "pe": 40.5,
+    "sectors": [
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "岱美股份",
+    "code": "603730",
+    "mcap_yi": 225.2,
+    "pe": 26.9,
+    "sectors": [
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "博杰股份",
+    "code": "002975",
+    "mcap_yi": 224.6,
+    "pe": 75.6,
+    "sectors": [
+      "ai",
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "星宇股份",
+    "code": "601799",
+    "mcap_yi": 223.9,
+    "pe": 14.1,
+    "sectors": [
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "火炬电子",
+    "code": "603678",
+    "mcap_yi": 223.5,
+    "pe": 74.2,
+    "sectors": [
+      "ai",
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "恩华药业",
+    "code": "002262",
+    "mcap_yi": 223.2,
+    "pe": 20.3,
+    "sectors": [
+      "medical"
+    ]
+  },
+  {
+    "name": "万丰奥威",
+    "code": "002085",
+    "mcap_yi": 221.5,
+    "pe": 24.5,
+    "sectors": [
+      "new_energy",
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "吉林敖东",
+    "code": "000623",
+    "mcap_yi": 221.5,
+    "pe": 7.0,
+    "sectors": [
+      "medical"
+    ]
+  },
+  {
+    "name": "雅化集团",
+    "code": "002497",
+    "mcap_yi": 221.1,
+    "pe": 12.9,
+    "sectors": [
+      "new_energy"
+    ]
+  },
+  {
+    "name": "许继电气",
+    "code": "000400",
+    "mcap_yi": 219.8,
+    "pe": 23.2,
+    "sectors": [
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "天士力",
+    "code": "600535",
+    "mcap_yi": 219.3,
+    "pe": 17.9,
+    "sectors": [
+      "medical"
+    ]
+  },
+  {
+    "name": "梅花生物",
+    "code": "600873",
+    "mcap_yi": 218.7,
+    "pe": 10.1,
+    "sectors": [
+      "consumer"
+    ]
+  },
+  {
+    "name": "顾家家居",
+    "code": "603816",
+    "mcap_yi": 218.6,
+    "pe": 12.9,
+    "sectors": [
+      "consumer"
+    ]
+  },
+  {
+    "name": "中信重工",
+    "code": "601608",
+    "mcap_yi": 218.4,
+    "pe": 57.3,
+    "sectors": [
+      "ai",
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "振华重工",
+    "code": "600320",
+    "mcap_yi": 216.0,
+    "pe": 24.3,
+    "sectors": [
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "振德医疗",
+    "code": "603301",
+    "mcap_yi": 215.6,
+    "pe": 77.9,
+    "sectors": [
+      "medical"
+    ]
+  },
+  {
+    "name": "申通快递",
+    "code": "002468",
+    "mcap_yi": 213.8,
+    "pe": 11.0,
+    "sectors": [
+      "ai"
+    ]
+  },
+  {
+    "name": "长源东谷",
+    "code": "603950",
+    "mcap_yi": 213.4,
+    "pe": 54.5,
+    "sectors": [
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "晨光股份",
+    "code": "603899",
+    "mcap_yi": 212.7,
+    "pe": 15.9,
+    "sectors": [
+      "consumer"
+    ]
+  },
+  {
+    "name": "尚太科技",
+    "code": "001301",
+    "mcap_yi": 212.4,
+    "pe": 24.5,
+    "sectors": [
+      "new_energy",
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "明泰铝业",
+    "code": "601677",
+    "mcap_yi": 211.2,
+    "pe": 8.7,
+    "sectors": [
+      "new_energy"
+    ]
+  },
+  {
+    "name": "汉缆股份",
+    "code": "002498",
+    "mcap_yi": 210.2,
+    "pe": 36.3,
+    "sectors": [
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "科士达",
+    "code": "002518",
+    "mcap_yi": 208.7,
+    "pe": 32.3,
+    "sectors": [
+      "new_energy",
+      "ai",
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "鼎胜新材",
+    "code": "603876",
+    "mcap_yi": 208.6,
+    "pe": 25.9,
+    "sectors": [
+      "new_energy"
+    ]
+  },
+  {
+    "name": "新大陆",
+    "code": "000997",
+    "mcap_yi": 207.6,
+    "pe": 18.8,
+    "sectors": [
+      "ai"
+    ]
+  },
+  {
+    "name": "莲花控股",
+    "code": "600186",
+    "mcap_yi": 207.4,
+    "pe": 53.0,
+    "sectors": [
+      "consumer"
+    ]
+  },
+  {
+    "name": "圣农发展",
+    "code": "002299",
+    "mcap_yi": 206.1,
+    "pe": 21.2,
+    "sectors": [
+      "consumer"
+    ]
+  },
+  {
+    "name": "首创环保",
+    "code": "600008",
+    "mcap_yi": 204.1,
+    "pe": 12.1,
+    "sectors": [
+      "ai"
+    ]
+  },
+  {
+    "name": "锦江酒店",
+    "code": "600754",
+    "mcap_yi": 203.9,
+    "pe": 18.5,
+    "sectors": [
+      "ai",
+      "consumer"
+    ]
+  },
+  {
+    "name": "晶方科技",
+    "code": "603005",
+    "mcap_yi": 201.7,
+    "pe": 59.8,
+    "sectors": [
+      "semi"
+    ]
+  },
+  {
+    "name": "上海建工",
+    "code": "600170",
+    "mcap_yi": 201.7,
+    "pe": 21.6,
+    "sectors": [
+      "ai"
+    ]
+  },
+  {
+    "name": "天地科技",
+    "code": "600582",
+    "mcap_yi": 200.7,
+    "pe": 18.2,
+    "sectors": [
+      "ai",
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "三星电气",
+    "code": "601567",
+    "mcap_yi": 199.4,
+    "pe": 33.8,
+    "sectors": [
+      "ai",
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "马可波罗",
+    "code": "001386",
+    "mcap_yi": 196.9,
+    "pe": 19.9,
+    "sectors": [
+      "ai",
+      "consumer"
+    ]
+  },
+  {
+    "name": "韵达股份",
+    "code": "002120",
+    "mcap_yi": 196.6,
+    "pe": 12.0,
+    "sectors": [
+      "consumer"
+    ]
+  },
+  {
+    "name": "淳中科技",
+    "code": "603516",
+    "mcap_yi": 194.1,
+    "pe": 43.0,
+    "sectors": [
+      "ai",
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "欧派家居",
+    "code": "603833",
+    "mcap_yi": 193.9,
+    "pe": 13.7,
+    "sectors": [
+      "consumer"
+    ]
+  },
+  {
+    "name": "珠江啤酒",
+    "code": "002461",
+    "mcap_yi": 193.7,
+    "pe": 20.1,
+    "sectors": [
+      "consumer"
+    ]
+  },
+  {
+    "name": "重庆啤酒",
+    "code": "600132",
+    "mcap_yi": 193.4,
+    "pe": 16.6,
+    "sectors": [
+      "consumer"
+    ]
+  },
+  {
+    "name": "融捷股份",
+    "code": "002192",
+    "mcap_yi": 192.1,
+    "pe": 16.1,
+    "sectors": [
+      "new_energy",
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "海南矿业",
+    "code": "601969",
+    "mcap_yi": 191.3,
+    "pe": 28.8,
+    "sectors": [
+      "new_energy"
+    ]
+  },
+  {
+    "name": "人民网",
+    "code": "603000",
+    "mcap_yi": 190.1,
+    "pe": 79.5,
+    "sectors": [
+      "ai"
+    ]
+  },
+  {
+    "name": "安图生物",
+    "code": "603658",
+    "mcap_yi": 188.1,
+    "pe": 18.9,
+    "sectors": [
+      "ai",
+      "medical"
+    ]
+  },
+  {
+    "name": "爱玛科技",
+    "code": "603529",
+    "mcap_yi": 187.4,
+    "pe": 12.6,
+    "sectors": [
+      "ai",
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "康弘药业",
+    "code": "002773",
+    "mcap_yi": 186.8,
+    "pe": 18.7,
+    "sectors": [
+      "medical"
+    ]
+  },
+  {
+    "name": "华谊集团",
+    "code": "600623",
+    "mcap_yi": 185.7,
+    "pe": 33.3,
+    "sectors": [
+      "new_energy"
+    ]
+  },
+  {
+    "name": "东方精工",
+    "code": "002611",
+    "mcap_yi": 185.4,
+    "pe": 4.4,
+    "sectors": [
+      "ai",
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "上海机电",
+    "code": "600835",
+    "mcap_yi": 184.6,
+    "pe": 26.5,
+    "sectors": [
+      "new_energy",
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "百润股份",
+    "code": "002568",
+    "mcap_yi": 184.5,
+    "pe": 25.4,
+    "sectors": [
+      "consumer"
+    ]
+  },
+  {
+    "name": "杰克科技",
+    "code": "603337",
+    "mcap_yi": 182.6,
+    "pe": 21.0,
+    "sectors": [
+      "ai",
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "美年健康",
+    "code": "002044",
+    "mcap_yi": 182.4,
+    "pe": 56.2,
+    "sectors": [
+      "ai",
+      "consumer",
+      "medical"
+    ]
+  },
+  {
+    "name": "豫能控股",
+    "code": "001896",
+    "mcap_yi": 181.7,
+    "pe": 51.5,
+    "sectors": [
+      "ai"
+    ]
+  },
+  {
+    "name": "中南传媒",
+    "code": "601098",
+    "mcap_yi": 180.1,
+    "pe": 11.9,
+    "sectors": [
+      "ai"
+    ]
+  },
+  {
+    "name": "新洋丰",
+    "code": "000902",
+    "mcap_yi": 179.4,
+    "pe": 11.1,
+    "sectors": [
+      "new_energy",
+      "consumer"
+    ]
+  },
+  {
+    "name": "和而泰",
+    "code": "002402",
+    "mcap_yi": 178.1,
+    "pe": 32.4,
+    "sectors": [
+      "ai",
+      "consumer"
+    ]
+  },
+  {
+    "name": "中电港",
+    "code": "001287",
+    "mcap_yi": 177.1,
+    "pe": 28.7,
+    "sectors": [
+      "ai"
+    ]
+  },
+  {
+    "name": "国网信通",
+    "code": "600131",
+    "mcap_yi": 176.6,
+    "pe": 28.4,
+    "sectors": [
+      "ai"
+    ]
+  },
+  {
+    "name": "科瑞技术",
+    "code": "002957",
+    "mcap_yi": 175.2,
+    "pe": 56.3,
+    "sectors": [
+      "new_energy",
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "宗申动力",
+    "code": "001696",
+    "mcap_yi": 175.1,
+    "pe": 30.3,
+    "sectors": [
+      "new_energy",
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "赛腾股份",
+    "code": "603283",
+    "mcap_yi": 173.4,
+    "pe": 31.9,
+    "sectors": [
+      "new_energy",
+      "ai",
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "大博医疗",
+    "code": "002901",
+    "mcap_yi": 173.4,
+    "pe": 24.5,
+    "sectors": [
+      "medical"
+    ]
+  },
+  {
+    "name": "老凤祥",
+    "code": "600612",
+    "mcap_yi": 172.9,
+    "pe": 13.8,
+    "sectors": [
+      "consumer"
+    ]
+  },
+  {
+    "name": "贵研铂业",
+    "code": "600459",
+    "mcap_yi": 171.9,
+    "pe": 25.8,
+    "sectors": [
+      "medical"
+    ]
+  },
+  {
+    "name": "鹏欣资源",
+    "code": "600490",
+    "mcap_yi": 171.3,
+    "pe": 55.5,
+    "sectors": [
+      "new_energy"
+    ]
+  },
+  {
+    "name": "粤桂股份",
+    "code": "000833",
+    "mcap_yi": 169.9,
+    "pe": 18.7,
+    "sectors": [
+      "new_energy",
+      "consumer"
+    ]
+  },
+  {
+    "name": "辽宁成大",
+    "code": "600739",
+    "mcap_yi": 169.1,
+    "pe": 10.3,
+    "sectors": [
+      "medical"
+    ]
+  },
+  {
+    "name": "健康元",
+    "code": "600380",
+    "mcap_yi": 168.5,
+    "pe": 14.1,
+    "sectors": [
+      "ai",
+      "medical"
+    ]
+  },
+  {
+    "name": "华润双鹤",
+    "code": "600062",
+    "mcap_yi": 167.0,
+    "pe": 10.3,
+    "sectors": [
+      "medical"
+    ]
+  },
+  {
+    "name": "钛能化学",
+    "code": "002145",
+    "mcap_yi": 166.3,
+    "pe": 32.1,
+    "sectors": [
+      "new_energy"
+    ]
+  },
+  {
+    "name": "豫光金铅",
+    "code": "600531",
+    "mcap_yi": 165.1,
+    "pe": 17.9,
+    "sectors": [
+      "new_energy"
+    ]
+  },
+  {
+    "name": "楚江新材",
+    "code": "002171",
+    "mcap_yi": 165.1,
+    "pe": 37.9,
+    "sectors": [
+      "new_energy"
+    ]
+  },
+  {
+    "name": "悍高集团",
+    "code": "001221",
+    "mcap_yi": 165.1,
+    "pe": 22.6,
+    "sectors": [
+      "consumer"
+    ]
+  },
+  {
+    "name": "上海贝岭",
+    "code": "600171",
+    "mcap_yi": 164.7,
+    "pe": 76.2,
+    "sectors": [
+      "new_energy",
+      "semi"
+    ]
+  },
+  {
+    "name": "森马服饰",
+    "code": "002563",
+    "mcap_yi": 158.9,
+    "pe": 15.2,
+    "sectors": [
+      "consumer"
+    ]
+  },
+  {
+    "name": "通化东宝",
+    "code": "600867",
+    "mcap_yi": 158.8,
+    "pe": 12.2,
+    "sectors": [
+      "medical"
+    ]
+  },
+  {
+    "name": "莱克电气",
+    "code": "603355",
+    "mcap_yi": 158.3,
+    "pe": 26.2,
+    "sectors": [
+      "consumer"
+    ]
+  },
+  {
+    "name": "步长制药",
+    "code": "603858",
+    "mcap_yi": 157.3,
+    "pe": 66.8,
+    "sectors": [
+      "medical"
+    ]
+  },
+  {
+    "name": "通策医疗",
+    "code": "600763",
+    "mcap_yi": 154.3,
+    "pe": 25.1,
+    "sectors": [
+      "medical"
+    ]
+  },
+  {
+    "name": "海立股份",
+    "code": "600619",
+    "mcap_yi": 153.5,
+    "pe": 75.9,
+    "sectors": [
+      "consumer"
+    ]
+  },
+  {
+    "name": "安孚科技",
+    "code": "603031",
+    "mcap_yi": 152.2,
+    "pe": 48.2,
+    "sectors": [
+      "new_energy",
+      "consumer",
+      "manufacturing"
+    ]
+  },
+  {
+    "name": "中国铁物",
+    "code": "000927",
+    "mcap_yi": 151.3,
+    "pe": 28.8,
+    "sectors": [
+      "ai",
+      "consumer"
+    ]
+  },
+  {
+    "name": "老板电器",
+    "code": "002508",
+    "mcap_yi": 150.2,
+    "pe": 13.4,
+    "sectors": [
+      "ai",
+      "consumer"
+    ]
+  },
+  {
+    "name": "比音勒芬",
+    "code": "002832",
+    "mcap_yi": 144.8,
+    "pe": 23.1,
+    "sectors": [
+      "consumer"
+    ]
+  },
+  {
+    "name": "天味食品",
+    "code": "603317",
+    "mcap_yi": 142.8,
+    "pe": 18.8,
+    "sectors": [
+      "consumer"
+    ]
+  },
+  {
+    "name": "伟星股份",
+    "code": "002003",
+    "mcap_yi": 142.6,
+    "pe": 20.7,
+    "sectors": [
+      "consumer"
+    ]
+  },
+  {
+    "name": "中炬高新",
+    "code": "600872",
+    "mcap_yi": 141.8,
+    "pe": 20.4,
+    "sectors": [
+      "consumer"
+    ]
+  },
+  {
+    "name": "创新新材",
+    "code": "600361",
+    "mcap_yi": 140.0,
+    "pe": 16.9,
+    "sectors": [
+      "consumer"
+    ]
+  },
+  {
+    "name": "江铃汽车",
+    "code": "000550",
+    "mcap_yi": 139.8,
+    "pe": 11.7,
+    "sectors": [
+      "consumer"
+    ]
+  },
+  {
+    "name": "华微电子",
+    "code": "600360",
+    "mcap_yi": 101.4,
+    "pe": 55.2,
+    "sectors": [
+      "semi"
+    ]
+  },
+  {
+    "name": "康强电子",
+    "code": "002119",
+    "mcap_yi": 89.6,
+    "pe": 74.5,
+    "sectors": [
+      "semi"
+    ]
+  }
+]
