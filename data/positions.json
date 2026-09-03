@@ -1,0 +1,26 @@
+{
+  "capital": 5000,
+  "positions": [
+    {
+      "code": "000601",
+      "name": "韶能股份",
+      "shares": 100,
+      "entry_price": 0,
+      "entry_date": "2026-08-01",
+      "stop_loss_pct": 0.05,
+      "take_profit_pct": 0.08,
+      "note": "用户实际持仓，成本价需手动更新"
+    },
+    {
+      "code": "600487",
+      "name": "亨通光电",
+      "shares": 100,
+      "entry_price": 0,
+      "entry_date": "2026-08-01",
+      "stop_loss_pct": 0.05,
+      "take_profit_pct": 0.08,
+      "note": "用户实际持仓，成本价需手动更新"
+    }
+  ],
+  "updated_at": "2026-09-03"
+}

@@ -24,6 +24,7 @@ from strategies.macd_resonance.oversold_rebound import OversoldReboundScanner, b
 from strategies.macd_resonance.tracking import record_recommendations, update_performance  # noqa: E402
 from strategies.macd_resonance.llm_analyzer import StockAnalyzer, build_analysis_message  # noqa: E402
 from strategies.macd_resonance.breakout import BreakoutScanner, build_breakout_message  # noqa: E402
+from strategies.macd_resonance.health_monitor import init_health_monitor  # noqa: E402
 from strategies.macd_resonance.trading_calendar import is_trading_time, now_bjt  # noqa: E402
 
 SCAN_TIMEOUT_S = 480  # 扫描硬超时（秒）：数据源异常挂起时兜底
@@ -120,6 +121,12 @@ def main():
         push_premarket_report()
         return
 
+    # 健康度监控：检查连续0推荐，自动降级
+    health = init_health_monitor()
+    param_override = health.get_current_params_override()
+    if param_override["level"] > 0:
+        print(f"⚠️ 系统处于降级状态 Level {param_override['level']}：{param_override['general'].get('note', '')}")
+
     scanner = Scanner()
     # 硬超时看门狗：数据源在云端异常挂起时，强制结束扫描，避免阻塞节奏
     result_box: dict = {}
@@ -211,6 +218,7 @@ def main():
         except Exception:
             pass
 
+    breakout_result = {"entries": []}  # 初始化，防止异常时未定义
     # ===== 趋势突破模式（第三策略，震荡市补充）=====
     try:
         print("\n" + "=" * 50)
@@ -257,6 +265,25 @@ def main():
             send_feishu_alert(f"趋势突破模式异常: {e}", "策略异常")
         except Exception:
             pass
+
+    # 统计今日总推荐数
+    total_recommendations = (
+        len(result.get("entries", [])) +
+        len(oversold_result.get("entries", [])) +
+        len(breakout_result.get("entries", []))
+    )
+
+    # 健康度监控：记录今日推荐数
+    health.record_recommendations(total_recommendations)
+    if total_recommendations == 0:
+        print(f"⚠️ 今日0推荐，连续0推荐天数：{health.state['consecutive_zero_days']}天")
+        if health.state["degradation_level"] > 0:
+            print(f"   当前降级等级：Level {health.state['degradation_level']}")
+    else:
+        print(f"✅ 今日推荐{total_recommendations}只，系统状态正常")
+
+    # 打印健康度报告
+    print("\n" + health.get_health_report())
 
     # 更新所有跟踪股票的表现（每天最后一次扫描时执行）
     try:
