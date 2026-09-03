@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
 from . import data_source as ds
-from .trading_calendar import now_bjt, is_trading_day
+from .trading_calendar import now_bjt
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 TRACKING_FILE = os.path.join(BASE_DIR, "data", "tracking.jsonl")
@@ -111,13 +111,18 @@ def record_recommendations(entries: List[Dict], strategy_type: str, scan_time: s
     return new_count
 
 
+def _is_trading_day(date: datetime) -> bool:
+    """简单判断是否为交易日（周一到周五，节假日后续优化）。"""
+    return date.weekday() < 5
+
+
 def _get_trading_days(start_date: str, count: int) -> List[str]:
     """获取从start_date开始的count个交易日日期列表。"""
     days = []
     current = datetime.strptime(start_date, "%Y-%m-%d")
     while len(days) < count:
         current += timedelta(days=1)
-        if is_trading_day(current):
+        if _is_trading_day(current):
             days.append(current.strftime("%Y-%m-%d"))
     return days
 
