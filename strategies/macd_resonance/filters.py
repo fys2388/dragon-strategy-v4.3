@@ -20,11 +20,12 @@ def is_st(name: str) -> bool:
     return "ST" in name.upper() or "退" in name
 
 
-def pass_hard_filters(stock_info: dict) -> Tuple[bool, str]:
+def pass_hard_filters(stock_info: dict, amplitude_max: float = None) -> Tuple[bool, str]:
     """硬过滤一票否决。
 
     Args:
         stock_info: 需含 code/name/price/float_cap_yi/amount_yi
+        amplitude_max: 动态振幅上限（自适应参数），为None时使用配置默认值
 
     Returns:
         (是否通过, 拒绝原因)
@@ -56,9 +57,10 @@ def pass_hard_filters(stock_info: dict) -> Tuple[bool, str]:
         return False, f"{code} 20日日均成交{amount_20d:.0f}万<{HARD_FILTERS['amount_20d_min']:.0f}万"
 
     # 6. 近20日累计振幅（上限）。数据缺失时跳过（不阻断）
+    amp_limit = amplitude_max if amplitude_max is not None else HARD_FILTERS["amplitude_20d_max"]
     amplitude_20d = float(stock_info.get("amplitude_20d_pct", 0) or 0)
-    if amplitude_20d > 0 and amplitude_20d > HARD_FILTERS["amplitude_20d_max"]:
-        return False, f"{code} 20日振幅{amplitude_20d:.1f}%>{HARD_FILTERS['amplitude_20d_max']:.0f}%"
+    if amplitude_20d > 0 and amplitude_20d > amp_limit:
+        return False, f"{code} 20日振幅{amplitude_20d:.1f}%>{amp_limit:.0f}%"
 
     # 7. 未来3个月大额解禁（≥总股本5%）—— 数据源无法获取时跳过不阻断
     unlock_pct = float(stock_info.get("unlock_pct_3m", 0) or 0)

@@ -17,6 +17,7 @@ from typing import Dict, List, Optional
 
 from . import data_source as ds
 from .config import OVERSOLD_REBOUND, HARD_FILTERS
+from .adaptive_config import get_oversold_params, get_current_regime, REGIME_LABELS
 from .signal_engine import SignalEngine
 from .trading_calendar import now_bjt
 
@@ -166,7 +167,19 @@ class OversoldReboundScanner:
 
     def run(self, max_stocks: int = 2000, need_push: bool = False) -> Dict:
         """执行超跌反弹扫描。"""
-        cfg = OVERSOLD_REBOUND
+        cfg = OVERSOLD_REBOUND.copy()
+        # 自适应：获取当前市场环境和动态参数
+        from .data_validator import get_data_with_fallback
+        try:
+            market_data, _ = get_data_with_fallback()
+        except Exception:
+            market_data = None
+        regime = get_current_regime(market_data)
+        adaptive_params = get_oversold_params(regime)
+        for key in ['drop_20d_min', 'today_gain_min', 'volume_ratio_min', 'daily_dif_floor', 'max_recommendations']:
+            if key in adaptive_params:
+                cfg[key] = adaptive_params[key]
+        LOG.info(f"[自适应] 市场环境={regime}({REGIME_LABELS.get(regime, '未知')}) 参数={adaptive_params['name']} 超跌要求={cfg['drop_20d_min']}% 启动涨幅={cfg['today_gain_min']}%")
         result = {
             "scan_time": now_bjt().strftime("%Y-%m-%d %H:%M:%S"),
             "mode": "oversold_rebound",
@@ -321,6 +334,9 @@ class OversoldReboundScanner:
             f" | 主要拒因：{'、'.join(top_rejects) if top_rejects else '无'}"
         )
         result["scan_elapsed"] = round(time.time() - t0, 1)
+        result["regime"] = regime
+        result["regime_label"] = REGIME_LABELS.get(regime, "未知")
+        result["adaptive_params"] = adaptive_params
         LOG.info(f"[超跌反弹] {result['summary']}，耗时{result['scan_elapsed']}s")
         return result
 
@@ -328,8 +344,13 @@ class OversoldReboundScanner:
 def build_oversold_message(result: Dict) -> str:
     """超跌反弹模式飞书消息。"""
     now = now_bjt().strftime("%Y-%m-%d %H:%M")
+    regime_label = result.get("regime_label", "")
+    param_name = ""
+    if result.get("adaptive_params"):
+        param_name = result["adaptive_params"].get("name", "")
+    env_tag = f" | {regime_label}·{param_name}" if regime_label else ""
     lines = [
-        f"🚀 超跌反弹策略 盘中实时 {now}",
+        f"🚀 超跌反弹策略 盘中实时 {now}{env_tag}",
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
         "",
         "【超跌反弹推荐】",

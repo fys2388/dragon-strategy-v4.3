@@ -147,7 +147,8 @@ def main():
     scan_time = result.get("scan_time", now_bjt().strftime("%Y-%m-%d %H:%M:%S"))
     resonance_entries = result.get("entries", [])
     if resonance_entries:
-        record_recommendations(resonance_entries, "resonance", scan_time)
+        regime = result.get("regime", "unknown")
+        record_recommendations(resonance_entries, "resonance", scan_time, regime)
 
     # ===== 超跌反弹模式（并行第二策略）=====
     try:
@@ -177,7 +178,8 @@ def main():
         oversold_entries = oversold_result.get("entries", [])
         if oversold_entries:
             oversold_time = oversold_result.get("scan_time", now_bjt().strftime("%Y-%m-%d %H:%M:%S"))
-            record_recommendations(oversold_entries, "oversold", oversold_time)
+            oversold_regime = oversold_result.get("regime", "unknown")
+            record_recommendations(oversold_entries, "oversold", oversold_time, oversold_regime)
     except Exception as e:
         print(f"❌ 超跌反弹扫描异常: {e}")
         try:

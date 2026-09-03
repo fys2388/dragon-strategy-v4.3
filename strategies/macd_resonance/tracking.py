@@ -51,13 +51,14 @@ def _append_record(record: Dict):
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
-def record_recommendations(entries: List[Dict], strategy_type: str, scan_time: str):
+def record_recommendations(entries: List[Dict], strategy_type: str, scan_time: str, regime: str = "unknown"):
     """记录一次扫描的推荐股票。
 
     Args:
         entries: 推荐股票列表，每项需含 code/name/price
         strategy_type: 策略类型 resonance / oversold
         scan_time: 扫描时间字符串
+        regime: 市场环境
     """
     if not entries:
         return 0
@@ -81,6 +82,7 @@ def record_recommendations(entries: List[Dict], strategy_type: str, scan_time: s
             "code": code,
             "name": name,
             "strategy": strategy_type,
+            "regime": regime,
             "recommend_price": price,
             "recommend_time": scan_time,
             "recommend_date": date_key,

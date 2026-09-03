@@ -20,6 +20,7 @@ from typing import Dict, List, Optional
 
 from . import data_source as ds
 from .config import RISK, SIGNAL
+from .adaptive_config import get_macd_params, get_risk_params, get_current_regime
 from .filters import pass_hard_filters
 from .market_gate import get_market_score
 from .portfolio_manager import PortfolioManager
@@ -362,6 +363,19 @@ class Scanner:
         result["market_desc"] = desc
         result["can_open"] = can_open
         LOG.info(f"大盘评分 {score:.1f}/7，门控{'通过' if can_open else '未通过'}")
+
+        # 1.5 自适应：获取当前市场环境和动态参数
+        regime = get_current_regime(chosen_md)
+        adaptive_params = get_macd_params(regime)
+        risk_params = get_risk_params(regime)
+        result["regime"] = regime
+        result["regime_label"] = REGIME_LABELS.get(regime, "未知")
+        result["adaptive_params"] = adaptive_params
+        result["risk_params"] = risk_params
+        LOG.info(f"[自适应] 市场环境={regime}({result['regime_label']}) "
+                 f"参数={adaptive_params['name']} "
+                 f"振幅上限={adaptive_params.get('amplitude_20d_max', 40)}% "
+                 f"最低得分={adaptive_params.get('min_score', 60)}")
         if not can_open:
             result["summary"] = f"大盘评分 {score:.1f} 分 < 4，仅允许平仓/空仓，禁止新开多。"
             LOG.info(result["summary"])
@@ -397,13 +411,14 @@ class Scanner:
         candidates = [s for s in all_stocks if self._quick_filter(s)]
         LOG.info(f"标的池 {len(all_stocks)} 只（校验:{pv.severity}）→ 初筛 {len(candidates)} 只")
 
-        # 3. 硬过滤（并发补齐 20 日均额/振幅）
+        # 3. 硬过滤（并发补齐 20 日均额/振幅，使用动态振幅上限）
         with ThreadPoolExecutor(max_workers=12) as pool:
             enriched = list(pool.map(self._enrich_hard_metrics, candidates))
         passed = []
         reject_reasons = Counter()
+        amp_max = adaptive_params.get("amplitude_20d_max", HARD_FILTERS["amplitude_20d_max"])
         for s in enriched:
-            ok, reason = pass_hard_filters(s)
+            ok, reason = pass_hard_filters(s, amplitude_max=amp_max)
             if ok:
                 passed.append(s)
             else:
@@ -451,9 +466,12 @@ class Scanner:
         LOG.info(f"周期信号统计：{tf_desc or '无'}")
         LOG.info(f"共振信号 {len(entries)} 只，空头规避 {avoid_count} 只")
 
-        # 5. 共振强度排序，取前 5
+        # 5. 共振强度排序，按动态最低得分过滤，取前N
+        min_score = adaptive_params.get("min_score", 0)
+        max_recs = adaptive_params.get("max_recommendations", 5)
+        entries = [e for e in entries if e.get("score", 0) >= min_score]
         entries.sort(key=lambda x: x.get("score", 0), reverse=True)
-        top = entries[:5]
+        top = entries[:max_recs]
 
         # 6. 去重冷却
         final = []
@@ -488,7 +506,11 @@ def build_message(result: Dict) -> str:
     lines.append("【大盘环境】")
     score = result.get("market_score", 0.0)
     can_open = result.get("can_open", False)
-    lines.append(f"大盘评分：{score:.1f}/7分 | {'🔴可开仓' if can_open else '🟢观望'}")
+    regime_label = result.get("regime_label", "")
+    param_name = ""
+    if result.get("adaptive_params"):
+        param_name = result["adaptive_params"].get("name", "")
+    lines.append(f"大盘评分：{score:.1f}/7分 | {'🔴可开仓' if can_open else '🟢观望'} | {regime_label}·{param_name}")
     market_desc = result.get("market_desc", "")
     for line in market_desc.split("\n")[:5]:
         if line.strip():
@@ -504,10 +526,11 @@ def build_message(result: Dict) -> str:
             lines.append(f"   共振级别：{levels} | 得分{e['score']}")
             lines.append(f"   理由：{e['reason']}")
             lines.append("")
-        single = RISK["total_capital"] * RISK["position_pct"]
+        risk = result.get("risk_params", RISK)
+        single = RISK["total_capital"] * risk.get("position_pct", 0.25)
         lines.append(f"💼 仓位建议（本金{RISK['total_capital']:.0f}元）")
-        lines.append(f"  单票≤30%（{single:.0f}元），最多{RISK['max_positions']}只")
-        lines.append(f"  止盈：+{RISK['take_profit_1_pct'] * 100:.0f}%减半 / +{RISK['take_profit_2_pct'] * 100:.0f}%清仓 | 止损：-{RISK['stop_loss_pct'] * 100:.0f}%")
+        lines.append(f"  单票≤{risk.get('position_pct', 0.25)*100:.0f}%（{single:.0f}元），最多{risk.get('max_positions', 2)}只")
+        lines.append(f"  止盈：+{risk.get('take_profit_1_pct', 0.1) * 100:.0f}%减半 / +{risk.get('take_profit_2_pct', 0.15) * 100:.0f}%清仓 | 止损：-{risk.get('stop_loss_pct', 0.05) * 100:.0f}%")
     else:
         lines.append("  当前无符合多周期共振的标的，继续观望")
     lines.append("")
