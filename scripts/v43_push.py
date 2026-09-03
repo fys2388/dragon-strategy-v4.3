@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from strategies.macd_resonance.scanner import Scanner, build_message  # noqa: E402
 from strategies.macd_resonance.oversold_rebound import OversoldReboundScanner, build_oversold_message  # noqa: E402
 from strategies.macd_resonance.tracking import record_recommendations, update_performance  # noqa: E402
+from strategies.macd_resonance.llm_analyzer import StockAnalyzer, build_analysis_message  # noqa: E402
 from strategies.macd_resonance.trading_calendar import is_trading_time, now_bjt  # noqa: E402
 
 SCAN_TIMEOUT_S = 480  # 扫描硬超时（秒）：数据源异常挂起时兜底
@@ -138,6 +139,17 @@ def main():
     else:
         result = result_box.get("r", {"summary": "扫描无结果"})
     msg = build_message(result)
+    # 智能分析（如果有推荐股票）
+    resonance_entries = result.get("entries", [])
+    if resonance_entries:
+        try:
+            analyzer = StockAnalyzer()
+            analyzed = analyzer.analyze_batch(resonance_entries)
+            analysis_msg = build_analysis_message(analyzed)
+            if analysis_msg:
+                msg = msg + analysis_msg
+        except Exception as e:
+            print(f"⚠️ 智能分析失败: {e}")
     print(msg)
     print("\n[SUMMARY]", result["summary"])
 
@@ -170,6 +182,17 @@ def main():
             oversold_result = oversold_box.get("r", {"summary": "超跌反弹扫描无结果"})
 
         oversold_msg = build_oversold_message(oversold_result)
+        # 智能分析（如果有推荐股票）
+        oversold_entries = oversold_result.get("entries", [])
+        if oversold_entries:
+            try:
+                analyzer = StockAnalyzer()
+                analyzed = analyzer.analyze_batch(oversold_entries)
+                analysis_msg = build_analysis_message(analyzed)
+                if analysis_msg:
+                    oversold_msg = oversold_msg + analysis_msg
+            except Exception as e:
+                print(f"⚠️ 超跌反弹智能分析失败: {e}")
         print(oversold_msg)
         print("\n[OVERSOLD SUMMARY]", oversold_result.get("summary", ""))
         _send_text(oversold_msg)
