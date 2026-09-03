@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from strategies.macd_resonance.scanner import Scanner, build_message  # noqa: E402
 from strategies.macd_resonance.oversold_rebound import OversoldReboundScanner, build_oversold_message  # noqa: E402
+from strategies.macd_resonance.tracking import record_recommendations, update_performance  # noqa: E402
 from strategies.macd_resonance.trading_calendar import is_trading_time, now_bjt  # noqa: E402
 
 SCAN_TIMEOUT_S = 480  # 扫描硬超时（秒）：数据源异常挂起时兜底
@@ -142,6 +143,12 @@ def main():
 
     _send_text(msg)
 
+    # 记录MACD共振推荐股到绩效跟踪
+    scan_time = result.get("scan_time", now_bjt().strftime("%Y-%m-%d %H:%M:%S"))
+    resonance_entries = result.get("entries", [])
+    if resonance_entries:
+        record_recommendations(resonance_entries, "resonance", scan_time)
+
     # ===== 超跌反弹模式（并行第二策略）=====
     try:
         print("\n" + "=" * 50)
@@ -165,12 +172,30 @@ def main():
         print(oversold_msg)
         print("\n[OVERSOLD SUMMARY]", oversold_result.get("summary", ""))
         _send_text(oversold_msg)
+
+        # 记录超跌反弹推荐股到绩效跟踪
+        oversold_entries = oversold_result.get("entries", [])
+        if oversold_entries:
+            oversold_time = oversold_result.get("scan_time", now_bjt().strftime("%Y-%m-%d %H:%M:%S"))
+            record_recommendations(oversold_entries, "oversold", oversold_time)
     except Exception as e:
         print(f"❌ 超跌反弹扫描异常: {e}")
         try:
             send_feishu_alert(f"超跌反弹模式异常: {e}", "策略异常")
         except Exception:
             pass
+
+    # 更新所有跟踪股票的表现（每天最后一次扫描时执行）
+    try:
+        now = now_bjt()
+        # 下午14:30之后的扫描执行表现更新（一天一次足够）
+        if now.hour >= 14 and now.minute >= 30:
+            print("\n" + "=" * 50)
+            print("📊 更新选股绩效跟踪...")
+            stats = update_performance()
+            print(f"[跟踪] 总计{stats['total']}只，更新{stats['updated']}只，完成{stats['completed']}只")
+    except Exception as e:
+        print(f"⚠️ 绩效跟踪更新失败: {e}")
 
 
 if __name__ == "__main__":
