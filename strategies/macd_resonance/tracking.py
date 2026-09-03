@@ -93,6 +93,10 @@ def record_recommendations(entries: List[Dict], strategy_type: str, scan_time: s
             "current_price": price,
             "current_return_pct": 0.0,
             "max_drawdown_pct": 0.0,
+            "mae_pct": 0.0,          # 最大不利波动（最大浮亏）
+            "mfe_pct": 0.0,          # 最大有利波动（最大浮盈）
+            "mae_day": None,         # MAE发生在第几天
+            "mfe_day": None,         # MFE发生在第几天
             "day1_close": None,
             "day1_return_pct": None,
             "day3_close": None,
@@ -192,6 +196,18 @@ def update_performance() -> Dict:
             if drawdown > r.get("max_drawdown_pct", 0):
                 r["max_drawdown_pct"] = round(drawdown, 2)
 
+            # 计算MAE（最大不利波动=最大浮亏）
+            mae = (recommend_price - low) / recommend_price * 100 if recommend_price > 0 else 0
+            if mae > r.get("mae_pct", 0):
+                r["mae_pct"] = round(mae, 2)
+                r["mae_day"] = i
+
+            # 计算MFE（最大有利波动=最大浮盈）
+            mfe = (high - recommend_price) / recommend_price * 100 if recommend_price > 0 else 0
+            if mfe > r.get("mfe_pct", 0):
+                r["mfe_pct"] = round(mfe, 2)
+                r["mfe_day"] = i
+
             # 更新各周期收盘价和收益率
             ret = round((close - recommend_price) / recommend_price * 100, 2)
             if i == 1:
@@ -249,6 +265,10 @@ def get_performance_summary() -> Dict:
             return {"count": 0, "win_rate": 0, "avg_return": 0, "max_return": 0, "min_return": 0}
         returns = [r[day_key] for r in valid]
         wins = [r for r in returns if r > 0]
+        avg_mae = round(sum(r.get("mae_pct", 0) for r in valid) / len(valid), 2)
+        avg_mfe = round(sum(r.get("mfe_pct", 0) for r in valid) / len(valid), 2)
+        # 盈亏效率比 = MFE/MAE，>1说明盈利空间大于亏损空间
+        efficiency = round(avg_mfe / avg_mae, 2) if avg_mae > 0 else 0
         return {
             "count": len(valid),
             "win_rate": round(len(wins) / len(valid) * 100, 1),
@@ -256,6 +276,9 @@ def get_performance_summary() -> Dict:
             "max_return": round(max(returns), 2),
             "min_return": round(min(returns), 2),
             "avg_max_drawdown": round(sum(r.get("max_drawdown_pct", 0) for r in valid) / len(valid), 2),
+            "avg_mae": avg_mae,           # 平均最大浮亏
+            "avg_mfe": avg_mfe,           # 平均最大浮盈
+            "efficiency_ratio": efficiency,  # 盈亏效率比 MFE/MAE
         }
 
     summary = {
@@ -320,9 +343,15 @@ def build_performance_message(summary: Dict) -> str:
             s = stats.get(period, {})
             if s.get("count", 0) > 0:
                 win_emoji = "🟢" if s["win_rate"] >= 50 else "🔴"
+                mae = s.get("avg_mae", 0)
+                mfe = s.get("avg_mfe", 0)
+                eff = s.get("efficiency_ratio", 0)
                 lines.append(
                     f"  {label}：样本{s['count']}只 | 胜率{win_emoji}{s['win_rate']}% | "
                     f"平均收益{s['avg_return']}% | 最大{s['max_return']}% | 最小{s['min_return']}%"
+                )
+                lines.append(
+                    f"       MAE最大浮亏{mae}% | MFE最大浮盈{mfe}% | 盈亏效率比{eff}"
                 )
         lines.append("")
 
@@ -333,9 +362,15 @@ def build_performance_message(summary: Dict) -> str:
         for period, label in [("day5", "5日"), ("day10", "10日"), ("day20", "20日")]:
             s = overall.get(period, {})
             if s.get("count", 0) > 0:
+                mae = s.get("avg_mae", 0)
+                mfe = s.get("avg_mfe", 0)
+                eff = s.get("efficiency_ratio", 0)
                 lines.append(
                     f"  {label}：胜率{s['win_rate']}% | 平均收益{s['avg_return']}% | "
                     f"平均最大回撤{s.get('avg_max_drawdown', 0)}%"
+                )
+                lines.append(
+                    f"       MAE最大浮亏{mae}% | MFE最大浮盈{mfe}% | 盈亏效率比{eff}"
                 )
         lines.append("")
 

@@ -27,8 +27,35 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 class BacktestEngine:
     """轻量级回测引擎。"""
 
-    def __init__(self):
+    # A股交易成本配置
+    COMMISSION_RATE = 0.00025    # 佣金万2.5
+    COMMISSION_MIN = 5.0         # 最低佣金5元
+    STAMP_TAX_RATE = 0.001       # 印花税千1（卖出）
+    SLIPPAGE_RATE = 0.001        # 滑点0.1%
+
+    def __init__(self, enable_cost: bool = True):
         self.trades = []
+        self.enable_cost = enable_cost
+
+    def _calc_buy_cost(self, price: float, shares: int) -> Dict:
+        """计算买入成本。"""
+        if not self.enable_cost:
+            return {"actual_price": price, "commission": 0, "total_cost": price * shares}
+        actual_price = price * (1 + self.SLIPPAGE_RATE)
+        commission = max(actual_price * shares * self.COMMISSION_RATE, self.COMMISSION_MIN)
+        total_cost = actual_price * shares + commission
+        return {"actual_price": round(actual_price, 3), "commission": round(commission, 2), "total_cost": round(total_cost, 2)}
+
+    def _calc_sell_cost(self, price: float, shares: int) -> Dict:
+        """计算卖出成本。"""
+        if not self.enable_cost:
+            return {"actual_price": price, "commission": 0, "stamp_tax": 0, "total_revenue": price * shares}
+        actual_price = price * (1 - self.SLIPPAGE_RATE)
+        commission = max(actual_price * shares * self.COMMISSION_RATE, self.COMMISSION_MIN)
+        stamp_tax = actual_price * shares * self.STAMP_TAX_RATE
+        total_revenue = actual_price * shares - commission - stamp_tax
+        return {"actual_price": round(actual_price, 3), "commission": round(commission, 2),
+                "stamp_tax": round(stamp_tax, 2), "total_revenue": round(total_revenue, 2)}
 
     def backtest_strategy(
         self,
@@ -81,32 +108,42 @@ class BacktestEngine:
             if position > 0:
                 # 检查当日是否触发止损止盈
                 if lows[i + 1] <= entry_price * 0.95:  # 止损-5%
-                    exit_price = entry_price * 0.95
-                    pnl = (exit_price - entry_price) * position
-                    capital += exit_price * position
+                    signal_exit = entry_price * 0.95
+                    sell_info = self._calc_sell_cost(signal_exit, position)
+                    exit_price = sell_info["actual_price"]
+                    pnl = sell_info["total_revenue"] - entry_price * position - entry_commission
+                    capital += sell_info["total_revenue"]
                     trades.append({
                         "entry_date": str(entry_date),
                         "exit_date": str(dates[i + 1]),
                         "entry_price": round(entry_price, 2),
                         "exit_price": round(exit_price, 2),
-                        "return_pct": round((exit_price - entry_price) / entry_price * 100, 2),
+                        "return_pct": round(pnl / (entry_price * position) * 100, 2),
                         "pnl": round(pnl, 2),
                         "reason": "stop_loss",
+                        "buy_commission": entry_commission,
+                        "sell_commission": sell_info["commission"],
+                        "stamp_tax": sell_info["stamp_tax"],
                     })
                     position = 0
                     continue
                 elif highs[i + 1] >= entry_price * 1.10:  # 止盈+10%
-                    exit_price = entry_price * 1.10
-                    pnl = (exit_price - entry_price) * position
-                    capital += exit_price * position
+                    signal_exit = entry_price * 1.10
+                    sell_info = self._calc_sell_cost(signal_exit, position)
+                    exit_price = sell_info["actual_price"]
+                    pnl = sell_info["total_revenue"] - entry_price * position - entry_commission
+                    capital += sell_info["total_revenue"]
                     trades.append({
                         "entry_date": str(entry_date),
                         "exit_date": str(dates[i + 1]),
                         "entry_price": round(entry_price, 2),
                         "exit_price": round(exit_price, 2),
-                        "return_pct": round((exit_price - entry_price) / entry_price * 100, 2),
+                        "return_pct": round(pnl / (entry_price * position) * 100, 2),
                         "pnl": round(pnl, 2),
                         "reason": "take_profit",
+                        "buy_commission": entry_commission,
+                        "sell_commission": sell_info["commission"],
+                        "stamp_tax": sell_info["stamp_tax"],
                     })
                     position = 0
                     continue
@@ -117,27 +154,36 @@ class BacktestEngine:
                     signal = strategy_func(history, i)
                     if signal and signal.get("buy"):
                         # 用次日开盘价买入（简化用收盘价）
-                        entry_price = closes[i + 1]
+                        signal_price = closes[i + 1]
+                        buy_info = self._calc_buy_cost(signal_price, int(capital * 0.3 / signal_price))
+                        entry_price = buy_info["actual_price"]
                         position = int(capital * 0.3 / entry_price)  # 30%仓位
                         if position > 0:
-                            capital -= entry_price * position
+                            buy_info = self._calc_buy_cost(signal_price, position)
+                            entry_price = buy_info["actual_price"]
+                            capital -= buy_info["total_cost"]
                             entry_date = dates[i + 1]
+                            entry_commission = buy_info["commission"]
                 except Exception:
                     continue
 
         # 最后平仓
         if position > 0:
-            exit_price = closes[-1]
-            pnl = (exit_price - entry_price) * position
-            capital += exit_price * position
+            sell_info = self._calc_sell_cost(closes[-1], position)
+            exit_price = sell_info["actual_price"]
+            pnl = sell_info["total_revenue"] - entry_price * position - entry_commission
+            capital += sell_info["total_revenue"]
             trades.append({
                 "entry_date": str(entry_date),
                 "exit_date": str(dates[-1]),
                 "entry_price": round(entry_price, 2),
                 "exit_price": round(exit_price, 2),
-                "return_pct": round((exit_price - entry_price) / entry_price * 100, 2),
+                "return_pct": round(pnl / (entry_price * position) * 100, 2),
                 "pnl": round(pnl, 2),
                 "reason": "end",
+                "buy_commission": entry_commission,
+                "sell_commission": sell_info["commission"],
+                "stamp_tax": sell_info["stamp_tax"],
             })
 
         # 计算绩效指标
@@ -203,6 +249,10 @@ class BacktestEngine:
             "total_return_pct": round(total_return, 2),
             "initial_capital": initial_capital,
             "final_capital": round(final_capital, 2),
+            "total_commission": round(sum(t.get("buy_commission", 0) + t.get("sell_commission", 0) for t in trades), 2),
+            "total_stamp_tax": round(sum(t.get("stamp_tax", 0) for t in trades), 2),
+            "total_trading_cost": round(sum(t.get("buy_commission", 0) + t.get("sell_commission", 0) + t.get("stamp_tax", 0) for t in trades), 2),
+            "cost_enabled": self.enable_cost,
             "trades": trades,
         }
 
@@ -408,6 +458,8 @@ def build_backtest_report(result: Dict, strategy_name: str) -> str:
     lines.append(f"  最大回撤：{result.get('avg_max_drawdown_pct', result.get('max_drawdown_pct', 0))}%")
     lines.append(f"  最佳单笔：{result.get('max_return_pct', 0)}%")
     lines.append(f"  最差单笔：{result.get('min_return_pct', 0)}%")
+    if result.get("cost_enabled"):
+        lines.append(f"  总交易成本：佣金{result.get('total_commission', 0)}元 + 印花税{result.get('total_stamp_tax', 0)}元 = {result.get('total_trading_cost', 0)}元")
     lines.append("")
 
     # 准入检查
