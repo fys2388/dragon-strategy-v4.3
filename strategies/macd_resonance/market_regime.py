@@ -46,7 +46,7 @@ def classify_regime(market_data: Optional[MarketData]) -> str:
     up = int(market_data.limit_up_count or 0)
     down = int(market_data.limit_down_count or 0)
     chg = float(market_data.index_change_pct or 0)
-    amount = float(market_data.total_amount_yi or 0)  # 两市成交额（亿）
+    amount = float(market_data.volume_yi or 0)  # 两市成交额（亿）
 
     # 1. 极端行情优先
     if down > 30 or abs(chg) > 3.5:
@@ -96,5 +96,5 @@ def get_regime_detail(market_data: Optional[MarketData]) -> Dict[str, Any]:
         "limit_up": int(market_data.limit_up_count or 0),
         "limit_down": int(market_data.limit_down_count or 0),
         "index_change_pct": float(market_data.index_change_pct or 0),
-        "total_amount_yi": float(market_data.total_amount_yi or 0),
+        "total_amount_yi": float(market_data.volume_yi or 0),
     }
