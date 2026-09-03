@@ -19,7 +19,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 from . import data_source as ds
-from .config import RISK, SIGNAL
+from .config import RISK, SIGNAL, HARD_FILTERS
 from .adaptive_config import get_macd_params, get_risk_params, get_current_regime
 from .filters import pass_hard_filters
 from .market_gate import get_market_score
