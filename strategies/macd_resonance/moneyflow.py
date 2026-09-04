@@ -125,11 +125,11 @@ def check_moneyflow_trend(stock_code: str, days: int = 5) -> Dict[str, Any]:
         }
     """
     df = get_moneyflow_daily(stock_code, days=days + 5)
-    if df.empty or len(df) < days:
+    if df.empty:
         return {"trend": "no_data", "consecutive_inflow_days": 0}
 
-    # 取最近days天
-    recent = df.tail(days)
+    # 盘中东财API可能只返回1天数据，有数据就用
+    recent = df.tail(min(days, len(df)))
     inflow_days = (recent["main_net_inflow"] > 0).sum()
     total_inflow = recent["main_net_inflow"].sum()
     avg_inflow = recent["main_net_inflow"].mean()
@@ -142,24 +142,29 @@ def check_moneyflow_trend(stock_code: str, days: int = 5) -> Dict[str, Any]:
         else:
             break
 
-    # 判断趋势
-    if consecutive >= 3 and total_inflow > 0:
-        trend = "strong_inflow"
-    elif inflow_days >= days * 0.6 and total_inflow > 0:
-        trend = "weak_inflow"
-    elif inflow_days <= days * 0.3 and total_inflow < 0:
-        trend = "outflow"
+    # 判断趋势（数据少时降低标准）
+    if len(recent) >= 3:
+        if consecutive >= 3 and total_inflow > 0:
+            trend = "strong_inflow"
+        elif inflow_days >= days * 0.6 and total_inflow > 0:
+            trend = "weak_inflow"
+        elif inflow_days <= days * 0.3 and total_inflow < 0:
+            trend = "outflow"
+        else:
+            trend = "neutral"
     else:
-        trend = "neutral"
+        # 只有1-2天数据，根据当天净流入判断
+        trend = "weak_inflow" if total_inflow > 0 else "outflow"
 
     return {
         "consecutive_inflow_days": consecutive,
         "total_inflow": round(total_inflow, 2),
         "avg_inflow": round(avg_inflow, 2),
-        "inflow_ratio": round(inflow_days / days * 100, 1),
+        "inflow_ratio": round(inflow_days / len(recent) * 100, 1),
         "trend": trend,
         "latest_main_inflow": round(df.iloc[-1]["main_net_inflow"], 2),
-        "latest_main_inflow_pct": round(df.iloc[-1]["main_net_inflow_pct"], 2),
+        "latest_main_inflow_pct": round(df.iloc[-1].get("main_net_inflow_pct", 0), 2),
+        "data_days": len(recent),
     }
 
 
