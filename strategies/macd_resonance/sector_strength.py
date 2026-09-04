@@ -24,6 +24,7 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 
 # 东财行业板块API
 SECTOR_API = "https://push2.eastmoney.com/api/qt/clist/get"
+PROXY_BASE = "https://macd-strategy-scheduler.fys2388.workers.dev"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -40,6 +41,34 @@ def get_sector_list() -> pd.DataFrame:
     Returns:
         DataFrame，包含：板块名称、板块代码、涨跌幅、成交量、领涨股等
     """
+    # 优先使用Cloudflare Worker代理（解决GitHub IP被限制问题）
+    try:
+        resp = requests.get(f"{PROXY_BASE}/proxy/sector", headers=HEADERS, timeout=10)
+        data = resp.json()
+        if data.get("data") and data["data"].get("diff"):
+            rows = []
+            for item in data["data"]["diff"]:
+                rows.append({
+                    "sector_code": item.get("f12", ""),
+                    "sector_name": item.get("f14", ""),
+                    "price": item.get("f2", 0),
+                    "change_pct": item.get("f3", 0),
+                    "change_amount": item.get("f4", 0),
+                    "volume": item.get("f5", 0),
+                    "amount": item.get("f6", 0),
+                    "amplitude": item.get("f7", 0),
+                    "turnover_rate": item.get("f8", 0),
+                    "main_net_inflow": item.get("f62", 0),
+                    "leading_stock": item.get("f128", ""),
+                    "leading_stock_pct": item.get("f136", 0),
+                    "up_count": item.get("f140", 0),
+                })
+            result = pd.DataFrame(rows)
+            print(f"[板块强度] Worker代理获取成功：{len(result)}个板块")
+            return result
+    except Exception as e:
+        print(f"[板块强度] Worker代理失败: {e}")
+
     try:
         import akshare as ak
         df = ak.stock_board_industry_name_em()

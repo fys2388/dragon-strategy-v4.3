@@ -34,8 +34,15 @@ export default {
   },
 
   async fetch(request, env) {
-    // 手动测试入口：浏览器访问 Worker URL 即可触发一次 scan
     const url = new URL(request.url);
+    const path = url.pathname;
+
+    // 东财API代理路由（解决GitHub Actions IP被限制问题）
+    if (path.startsWith("/proxy/")) {
+      return await proxyEastmoney(url);
+    }
+
+    // 手动测试入口：浏览器访问 Worker URL 即可触发一次 scan
     const mode = url.searchParams.get("mode") || "scan";
     const result = await triggerWorkflow(env, WORKFLOW_FILE, mode);
     return new Response(JSON.stringify(result), {
@@ -43,6 +50,78 @@ export default {
     });
   },
 };
+
+// 东财API代理
+async function proxyEastmoney(url) {
+  const path = url.pathname;
+  const EASTMONEY_BASE = "https://push2.eastmoney.com";
+  const EASTMONEY_ANNOUNCEMENT = "https://np-anotice-stock.eastmoney.com";
+  const HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Referer": "https://quote.eastmoney.com/",
+    "Accept": "application/json, text/plain, */*",
+  };
+
+  try {
+    let targetUrl = null;
+
+    if (path === "/proxy/sector") {
+      const params = new URLSearchParams({
+        pn: "1", pz: "100", po: "1", np: "1", fltt: "2", invt: "2",
+        fid: "f3", fs: "m:90+t:2",
+        fields: "f12,f14,f2,f3,f4,f5,f6,f7,f8,f15,f16,f17,f18,f20,f21,f62,f128,f136,f140",
+      });
+      targetUrl = `${EASTMONEY_BASE}/api/qt/clist/get?${params.toString()}`;
+    }
+    else if (path === "/proxy/moneyflow") {
+      const code = url.searchParams.get("code") || "";
+      const days = url.searchParams.get("days") || "10";
+      if (!code) return new Response(JSON.stringify({error: "缺少code"}), {status: 400});
+      const market = code.startsWith("6") ? "1" : "0";
+      const params = new URLSearchParams({
+        secid: `${market}.${code}`,
+        fields1: "f1,f2,f3,f7", fields2: "f51,f52,f53,f54,f55,f56,f57",
+        klt: "101", lmt: days,
+      });
+      targetUrl = `${EASTMONEY_BASE}/api/qt/stock/fflow/kline/get?${params.toString()}`;
+    }
+    else if (path === "/proxy/fundamental") {
+      const code = url.searchParams.get("code") || "";
+      if (!code) return new Response(JSON.stringify({error: "缺少code"}), {status: 400});
+      const market = code.startsWith("6") ? "1" : "0";
+      const params = new URLSearchParams({
+        secid: `${market}.${code}`,
+        fields: "f55,f57,f58,f116,f117,f162,f167,f173,f187,f188,f190,f191,f192",
+      });
+      targetUrl = `${EASTMONEY_BASE}/api/qt/stock/get?${params.toString()}`;
+    }
+    else if (path === "/proxy/news") {
+      const code = url.searchParams.get("code") || "";
+      if (!code) return new Response(JSON.stringify({error: "缺少code"}), {status: 400});
+      const params = new URLSearchParams({
+        sr: "-1", page_size: "20", page_index: "1",
+        ann_type: "A", client_source: "web", stock_list: code,
+      });
+      targetUrl = `${EASTMONEY_ANNOUNCEMENT}/api/security/ann?${params.toString()}`;
+    }
+    else {
+      return new Response(JSON.stringify({error: "不支持的路径"}), {status: 404});
+    }
+
+    const resp = await fetch(targetUrl, {
+      method: "GET",
+      headers: HEADERS,
+      cf: { cacheTtl: 30, cacheEverything: true },
+    });
+    const data = await resp.text();
+    return new Response(data, {
+      status: resp.status,
+      headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "public, max-age=30" },
+    });
+  } catch (e) {
+    return new Response(JSON.stringify({error: `代理失败: ${e.message}`}), {status: 500});
+  }
+}
 
 async function handleTrigger(event, env) {
   // event.scheduledTime 可能是 Date 对象或数字时间戳，统一转成毫秒

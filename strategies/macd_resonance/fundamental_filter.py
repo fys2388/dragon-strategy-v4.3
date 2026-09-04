@@ -25,6 +25,7 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 
 # 东财个股基本面API
 FUNDAMENTAL_API = "https://push2.eastmoney.com/api/qt/stock/get"
+PROXY_BASE = "https://macd-strategy-scheduler.fys2388.workers.dev"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -51,6 +52,29 @@ def get_fundamental(stock_code: str) -> Dict[str, Any]:
         "secid": secid,
         "fields": "f55,f57,f58,f116,f117,f162,f167,f173,f187,f188,f190,f191,f192",
     }
+
+    # 优先使用Cloudflare Worker代理
+    try:
+        resp = requests.get(f"{PROXY_BASE}/proxy/fundamental?code={stock_code}", headers=HEADERS, timeout=10)
+        data = resp.json()
+        if data.get("data"):
+            d = data["data"]
+            return {
+                "code": stock_code,
+                "name": d.get("f58", ""),
+                "pe": d.get("f162", 0),
+                "pb": d.get("f167", 0),
+                "roe": d.get("f173", 0),
+                "gross_margin": d.get("f187", 0),
+                "net_margin": d.get("f188", 0),
+                "debt_ratio": d.get("f190", 0),
+                "revenue_growth": d.get("f191", 0),
+                "profit_growth": d.get("f192", 0),
+                "total_mv": d.get("f116", 0),
+                "circulating_mv": d.get("f117", 0),
+            }
+    except Exception as e:
+        print(f"[基本面] Worker代理获取{stock_code}失败: {e}")
 
     try:
         resp = requests.get(FUNDAMENTAL_API, params=params, headers=HEADERS, timeout=8)

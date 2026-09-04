@@ -23,6 +23,7 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 
 # 东财资金流API
 MONEYFLOW_API = "https://push2.eastmoney.com/api/qt/stock/fflow/kline/get"
+PROXY_BASE = "https://macd-strategy-scheduler.fys2388.workers.dev"
 
 # 请求头
 HEADERS = {

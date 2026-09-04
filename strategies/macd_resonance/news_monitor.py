@@ -25,6 +25,7 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 
 # 东财公告API
 ANNOUNCEMENT_API = "https://np-anotice-stock.eastmoney.com/api/security/ann"
+PROXY_BASE = "https://macd-strategy-scheduler.fys2388.workers.dev"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -72,6 +73,24 @@ def get_announcements(stock_code: str, days: int = 7) -> List[Dict[str, Any]]:
         "f_node": 0,
         "s_node": 0,
     }
+
+    # 优先使用Cloudflare Worker代理
+    try:
+        resp = requests.get(f"{PROXY_BASE}/proxy/news?code={stock_code}", headers=HEADERS, timeout=10)
+        data = resp.json()
+        if data.get("data") and data["data"].get("list"):
+            announcements = []
+            for item in data["data"]["list"]:
+                title = item.get("title", "")
+                announcements.append({
+                    "title": title,
+                    "date": item.get("notice_date", ""),
+                    "type": item.get("columns", [{}])[0].get("column_name", "") if item.get("columns") else "",
+                    "sentiment": _classify_sentiment(title),
+                })
+            return announcements[:20]
+    except Exception as e:
+        print(f"[消息面] Worker代理获取{stock_code}失败: {e}")
 
     try:
         resp = requests.get(ANNOUNCEMENT_API, params=params, headers=HEADERS, timeout=8)
