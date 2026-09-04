@@ -76,7 +76,7 @@ def get_moneyflow_daily(stock_code: str, days: int = 20) -> pd.DataFrame:
         records = []
         for line in klines:
             parts = line.split(",")
-            if len(parts) >= 7:
+            if len(parts) >= 6:
                 records.append({
                     "date": parts[0],
                     "main_net_inflow": float(parts[1]) / 10000,  # 元转万元
