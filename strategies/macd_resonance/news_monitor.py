@@ -86,7 +86,7 @@ def get_announcements(stock_code: str, days: int = 7) -> List[Dict[str, Any]]:
                     "title": title,
                     "date": item.get("notice_date", ""),
                     "type": item.get("columns", [{}])[0].get("column_name", "") if item.get("columns") else "",
-                    "sentiment": _classify_sentiment(title),
+                    "sentiment": "neutral",
                 })
             return announcements[:20]
     except Exception as e:
