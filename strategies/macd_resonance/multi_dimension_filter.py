@@ -93,6 +93,7 @@ class MultiDimensionFilter:
         # 4. 综合评分和过滤
         passed = []
         rejected = []
+        hard_rejected = []  # 硬过滤（PE过高等）
         scores = {}
 
         for candidate in candidates:
@@ -100,6 +101,19 @@ class MultiDimensionFilter:
             name = candidate.get("name", "")
             if not code:
                 continue
+
+            # 基本面硬过滤：PE>100直接拒绝（避免0推荐死循环，最后会降级）
+            if self.enable_fundamental and fundamental_results.get(code):
+                fund = fundamental_results[code]
+                pe = fund.get("pe", 0)
+                if pe and pe > 100:
+                    hard_rejected.append({
+                        "code": code, "name": name,
+                        "score": 0,
+                        "reason": f"PE过高({pe:.0f}>100)，硬过滤",
+                        "candidate": candidate,
+                    })
+                    continue
 
             score = 100  # 基础分
             deductions = []
@@ -187,6 +201,19 @@ class MultiDimensionFilter:
 
         # 按综合评分降序
         passed.sort(key=lambda x: x.get("multi_score", 0), reverse=True)
+
+        # 降级：如果硬过滤后没有股票通过，把硬过滤的股票放进来（避免0推荐死循环）
+        if not passed and hard_rejected:
+            print(f"[多维过滤] 硬过滤后无股票，自动降级：恢复{len(hard_rejected)}只硬过滤股票")
+            for hr in hard_rejected:
+                cand = hr["candidate"]
+                cand["multi_score"] = 50  # 降级股票给基础分
+                cand["dimension_scores"] = {"fundamental": 30}
+                cand["deductions"] = [hr["reason"]]
+                passed.append(cand)
+            rejected.extend([{k: v for k, v in hr.items() if k != "candidate"} for hr in hard_rejected])
+        else:
+            rejected.extend([{k: v for k, v in hr.items() if k != "candidate"} for hr in hard_rejected])
 
         print(f"[多维过滤] 完成：{len(candidates)}只候选 → {len(passed)}只通过，{len(rejected)}只过滤")
         return {"passed": passed, "rejected": rejected, "scores": scores}
