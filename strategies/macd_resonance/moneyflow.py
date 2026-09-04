@@ -57,6 +57,31 @@ def get_moneyflow_daily(stock_code: str, days: int = 20) -> pd.DataFrame:
         main_net_inflow_pct（主力净流入占成交额比例）
     """
     secid = _get_secid(stock_code)
+
+    # 优先使用Cloudflare Worker代理（解决GitHub IP被限制问题）
+    try:
+        resp = requests.get(f"{PROXY_BASE}/proxy/moneyflow?code={stock_code}&days={days}", headers=HEADERS, timeout=10)
+        data = resp.json()
+        if data.get("data") and data["data"].get("klines"):
+            klines = data["data"]["klines"]
+            records = []
+            for line in klines:
+                parts = line.split(",")
+                if len(parts) >= 6:
+                    records.append({
+                        "date": parts[0],
+                        "main_net_inflow": float(parts[1]) / 10000,
+                        "small_net_inflow": float(parts[2]) / 10000,
+                        "medium_net_inflow": float(parts[3]) / 10000,
+                        "large_net_inflow": float(parts[4]) / 10000,
+                        "super_large_net_inflow": float(parts[5]) / 10000,
+                        "main_net_inflow_pct": float(parts[6]) if len(parts) >= 7 else 0,
+                    })
+            result = pd.DataFrame(records).tail(days)
+            return result
+    except Exception as e:
+        print(f"[资金流] Worker代理获取{stock_code}失败: {e}")
+
     params = {
         "secid": secid,
         "fields1": "f1,f2,f3,f7",
