@@ -28,6 +28,8 @@ from strategies.macd_resonance.health_monitor import init_health_monitor  # noqa
 from strategies.macd_resonance.ai_scorer import init_ai_scorer  # noqa: E402
 from strategies.macd_resonance.market_cluster import init_market_cluster  # noqa: E402
 from strategies.macd_resonance import data_source as ds  # noqa: E402
+from strategies.macd_resonance.multi_dimension_filter import init_multi_filter  # noqa: E402
+from strategies.macd_resonance.sector_strength import get_strong_sectors, build_sector_report  # noqa: E402
 from strategies.macd_resonance.trading_calendar import is_trading_time, now_bjt  # noqa: E402
 
 SCAN_TIMEOUT_S = 480  # 扫描硬超时（秒）：数据源异常挂起时兜底
@@ -82,6 +84,26 @@ def ai_filter_entries(entries: list, strategy_type: str = "") -> list:
     except Exception as e:
         print(f"⚠️ AI打分失败，保留原始推荐: {e}")
         return entries
+
+
+def add_multi_dimension_detail(entries: list) -> str:
+    """给推荐股票添加多维详情（资金面/基本面/消息面）。"""
+    if not entries:
+        return ""
+    try:
+        mfilter = init_multi_filter()
+        details = []
+        for e in entries:
+            code = e.get("code", "")
+            name = e.get("name", "")
+            if code:
+                detail = mfilter.build_stock_detail(code, name)
+                if detail:
+                    details.append(f"\n  【{name}({code})多维分析】\n{detail}")
+        return "\n".join(details)
+    except Exception as e:
+        print(f"⚠️ 多维详情生成失败: {e}")
+        return ""
 
 
 def get_market_cluster_info() -> dict:
@@ -195,6 +217,11 @@ def main():
                 msg = msg + analysis_msg
         except Exception as e:
             print(f"⚠️ 智能分析失败: {e}")
+    # 多维详情
+    if resonance_entries:
+        multi_detail = add_multi_dimension_detail(resonance_entries)
+        if multi_detail:
+            msg = msg + "\n" + multi_detail
     print(msg)
     print("\n[SUMMARY]", result["summary"])
 
@@ -241,6 +268,11 @@ def main():
                     oversold_msg = oversold_msg + analysis_msg
             except Exception as e:
                 print(f"⚠️ 超跌反弹智能分析失败: {e}")
+        # 多维详情
+        if oversold_entries:
+            multi_detail = add_multi_dimension_detail(oversold_entries)
+            if multi_detail:
+                oversold_msg = oversold_msg + "\n" + multi_detail
         print(oversold_msg)
         print("\n[OVERSOLD SUMMARY]", oversold_result.get("summary", ""))
         all_messages.append(oversold_msg)
@@ -292,6 +324,11 @@ def main():
                     breakout_msg = breakout_msg + analysis_msg
             except Exception as e:
                 print(f"⚠️ 趋势突破智能分析失败: {e}")
+        # 多维详情
+        if breakout_entries:
+            multi_detail = add_multi_dimension_detail(breakout_entries)
+            if multi_detail:
+                breakout_msg = breakout_msg + "\n" + multi_detail
         print(breakout_msg)
         print("\n[BREAKOUT SUMMARY]", breakout_result.get("summary", ""))
         all_messages.append(breakout_msg)
@@ -324,6 +361,15 @@ def main():
     else:
         print(f"✅ 今日推荐{total_recommendations}只，系统状态正常")
 
+    # 获取强势板块
+    sector_report = ""
+    try:
+        strong_sectors = get_strong_sectors(top_n=5)
+        if strong_sectors:
+            sector_report = build_sector_report(strong_sectors) + "\n\n"
+    except Exception as e:
+        print(f"⚠️ 板块强度获取失败: {e}")
+
     # 获取市场聚类状态
     cluster_info = get_market_cluster_info()
     cluster_header = ""
@@ -337,7 +383,7 @@ def main():
         )
 
     # 合并所有策略消息为一条推送
-    combined_msg = cluster_header + "\n\n".join(all_messages)
+    combined_msg = cluster_header + sector_report + "\n\n".join(all_messages)
     _send_text(combined_msg)
     print(f"\n📨 合并推送完成，共{len(all_messages)}个策略模块，市场状态={cluster_info.get('cluster_name_cn', '未知')}")
 
