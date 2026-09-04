@@ -161,7 +161,8 @@ def main():
     print(msg)
     print("\n[SUMMARY]", result["summary"])
 
-    _send_text(msg)
+    # 收集所有策略消息，最后合并推送（避免三条消息轰炸）
+    all_messages = [msg]
 
     # 记录MACD共振推荐股到绩效跟踪
     scan_time = result.get("scan_time", now_bjt().strftime("%Y-%m-%d %H:%M:%S"))
@@ -203,7 +204,7 @@ def main():
                 print(f"⚠️ 超跌反弹智能分析失败: {e}")
         print(oversold_msg)
         print("\n[OVERSOLD SUMMARY]", oversold_result.get("summary", ""))
-        _send_text(oversold_msg)
+        all_messages.append(oversold_msg)
 
         # 记录超跌反弹推荐股到绩效跟踪
         oversold_entries = oversold_result.get("entries", [])
@@ -252,7 +253,7 @@ def main():
                 print(f"⚠️ 趋势突破智能分析失败: {e}")
         print(breakout_msg)
         print("\n[BREAKOUT SUMMARY]", breakout_result.get("summary", ""))
-        _send_text(breakout_msg)
+        all_messages.append(breakout_msg)
 
         # 记录趋势突破推荐股
         if breakout_entries:
@@ -281,6 +282,11 @@ def main():
             print(f"   当前降级等级：Level {health.state['degradation_level']}")
     else:
         print(f"✅ 今日推荐{total_recommendations}只，系统状态正常")
+
+    # 合并所有策略消息为一条推送
+    combined_msg = "\n\n".join(all_messages)
+    _send_text(combined_msg)
+    print(f"\n📨 合并推送完成，共{len(all_messages)}个策略模块")
 
     # 打印健康度报告
     print("\n" + health.get_health_report())
