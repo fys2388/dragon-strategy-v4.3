@@ -25,6 +25,9 @@ from strategies.macd_resonance.tracking import record_recommendations, update_pe
 from strategies.macd_resonance.llm_analyzer import StockAnalyzer, build_analysis_message  # noqa: E402
 from strategies.macd_resonance.breakout import BreakoutScanner, build_breakout_message  # noqa: E402
 from strategies.macd_resonance.health_monitor import init_health_monitor  # noqa: E402
+from strategies.macd_resonance.ai_scorer import init_ai_scorer  # noqa: E402
+from strategies.macd_resonance.market_cluster import init_market_cluster  # noqa: E402
+from strategies.macd_resonance import data_source as ds  # noqa: E402
 from strategies.macd_resonance.trading_calendar import is_trading_time, now_bjt  # noqa: E402
 
 SCAN_TIMEOUT_S = 480  # 扫描硬超时（秒）：数据源异常挂起时兜底
@@ -64,6 +67,38 @@ def _send_text(msg: str) -> bool:
     except Exception as e:
         print(f"❌ 飞书推送失败: {e}")
         return False
+
+
+def ai_filter_entries(entries: list, strategy_type: str = "") -> list:
+    """用AI模型过滤候选股票，只保留上涨概率>55%的。
+    AI模型不可用时自动降级为原始推荐，不中断运行。
+    """
+    if not entries:
+        return entries
+    try:
+        scorer = init_ai_scorer(min_probability=0.55)
+        scored = scorer.score_candidates(entries, strategy_type)
+        return scored
+    except Exception as e:
+        print(f"⚠️ AI打分失败，保留原始推荐: {e}")
+        return entries
+
+
+def get_market_cluster_info() -> dict:
+    """获取当前市场聚类状态和策略建议。"""
+    try:
+        cluster = init_market_cluster()
+        index_df = ds.get_kline_daily("000001", count=60)
+        if index_df.empty:
+            return {}
+        # 用默认涨跌停数据（聚类主要看指数走势，涨跌停是辅助）
+        result = cluster.predict(index_df, limit_up_count=50, limit_down_count=0, total_volume_yi=10000)
+        params = cluster.get_strategy_params(result["cluster_name"])
+        result["strategy_params"] = params
+        return result
+    except Exception as e:
+        print(f"⚠️ 市场聚类获取失败: {e}")
+        return {}
 
 
 def push_premarket_report() -> None:
@@ -146,6 +181,8 @@ def main():
             print(f"⚠️ 超时告警推送失败: {e}")
     else:
         result = result_box.get("r", {"summary": "扫描无结果"})
+    # AI打分过滤：只保留上涨概率>55%的候选
+    result["entries"] = ai_filter_entries(result.get("entries", []), "resonance")
     msg = build_message(result)
     # 智能分析（如果有推荐股票）
     resonance_entries = result.get("entries", [])
@@ -190,6 +227,8 @@ def main():
         else:
             oversold_result = oversold_box.get("r", {"summary": "超跌反弹扫描无结果"})
 
+        # AI打分过滤
+        oversold_result["entries"] = ai_filter_entries(oversold_result.get("entries", []), "oversold")
         oversold_msg = build_oversold_message(oversold_result)
         # 智能分析（如果有推荐股票）
         oversold_entries = oversold_result.get("entries", [])
@@ -239,6 +278,8 @@ def main():
         else:
             breakout_result = breakout_box.get("r", {"summary": "趋势突破扫描无结果"})
 
+        # AI打分过滤
+        breakout_result["entries"] = ai_filter_entries(breakout_result.get("entries", []), "breakout")
         breakout_msg = build_breakout_message(breakout_result)
         # 智能分析
         breakout_entries = breakout_result.get("entries", [])
@@ -283,10 +324,22 @@ def main():
     else:
         print(f"✅ 今日推荐{total_recommendations}只，系统状态正常")
 
+    # 获取市场聚类状态
+    cluster_info = get_market_cluster_info()
+    cluster_header = ""
+    if cluster_info:
+        params = cluster_info.get("strategy_params", {})
+        cluster_header = (
+            f"🧠 AI市场状态：{cluster_info.get('cluster_name_cn', '未知')}"
+            f"（{cluster_info.get('cluster_name', '')}）\n"
+            f"📌 {params.get('recommendation', '')}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        )
+
     # 合并所有策略消息为一条推送
-    combined_msg = "\n\n".join(all_messages)
+    combined_msg = cluster_header + "\n\n".join(all_messages)
     _send_text(combined_msg)
-    print(f"\n📨 合并推送完成，共{len(all_messages)}个策略模块")
+    print(f"\n📨 合并推送完成，共{len(all_messages)}个策略模块，市场状态={cluster_info.get('cluster_name_cn', '未知')}")
 
     # 打印健康度报告
     print("\n" + health.get_health_report())
