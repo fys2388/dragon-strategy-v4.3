@@ -35,24 +35,45 @@ HEADERS = {
 
 
 def get_sector_list() -> pd.DataFrame:
-    """获取行业板块列表及实时行情。
+    """获取行业板块列表及实时行情（使用akshare，兼容性更好）。
 
     Returns:
         DataFrame，包含：板块名称、板块代码、涨跌幅、成交量、领涨股等
     """
-    params = {
-        "pn": 1,
-        "pz": 100,
-        "po": 1,
-        "np": 1,
-        "fltt": 2,
-        "invt": 2,
-        "fid": "f3",
-        "fs": "m:90+t:2",  # 行业板块
-        "fields": "f12,f14,f2,f3,f4,f5,f6,f7,f8,f15,f16,f17,f18,f20,f21,f62,f128,f136,f140",
-    }
-
     try:
+        import akshare as ak
+        df = ak.stock_board_industry_name_em()
+        if df is not None and not df.empty:
+            rows = []
+            for _, row in df.iterrows():
+                rows.append({
+                    "sector_code": str(row.get("板块代码", "")),
+                    "sector_name": str(row.get("板块名称", "")),
+                    "price": float(row.get("最新价", 0) or 0),
+                    "change_pct": float(row.get("涨跌幅", 0) or 0),
+                    "change_amount": float(row.get("涨跌额", 0) or 0),
+                    "volume": float(row.get("成交量", 0) or 0),
+                    "amount": float(row.get("成交额", 0) or 0),
+                    "amplitude": float(row.get("振幅", 0) or 0),
+                    "turnover_rate": float(row.get("换手率", 0) or 0),
+                    "main_net_inflow": 0,
+                    "leading_stock": str(row.get("领涨股票", "")),
+                    "leading_stock_pct": float(row.get("领涨股票-涨跌幅", 0) or 0),
+                    "up_count": int(row.get("上涨家数", 0) or 0),
+                })
+            result = pd.DataFrame(rows)
+            print(f"[板块强度] akshare获取板块列表成功：{len(result)}个板块")
+            return result
+    except Exception as e:
+        print(f"[板块强度] akshare获取失败: {e}")
+
+    # 降级：使用requests直接调用API
+    try:
+        params = {
+            "pn": 1, "pz": 100, "po": 1, "np": 1, "fltt": 2, "invt": 2,
+            "fid": "f3", "fs": "m:90+t:2",
+            "fields": "f12,f14,f2,f3,f4,f5,f6,f7,f8,f15,f16,f17,f18,f20,f21,f62,f128,f136,f140",
+        }
         resp = requests.get(SECTOR_API, params=params, headers=HEADERS, timeout=10)
         data = resp.json()
         if data.get("data") and data["data"].get("diff"):
@@ -68,19 +89,14 @@ def get_sector_list() -> pd.DataFrame:
                     "amount": item.get("f6", 0),
                     "amplitude": item.get("f7", 0),
                     "turnover_rate": item.get("f8", 0),
-                    "high": item.get("f15", 0),
-                    "low": item.get("f16", 0),
-                    "open": item.get("f17", 0),
-                    "prev_close": item.get("f18", 0),
-                    "main_net_inflow": item.get("f62", 0),  # 主力净流入
-                    "leading_stock": item.get("f128", ""),  # 领涨股
-                    "leading_stock_pct": item.get("f136", 0),  # 领涨股涨幅
-                    "up_count": item.get("f140", 0),  # 上涨家数
+                    "main_net_inflow": item.get("f62", 0),
+                    "leading_stock": item.get("f128", ""),
+                    "leading_stock_pct": item.get("f136", 0),
+                    "up_count": item.get("f140", 0),
                 })
-            df = pd.DataFrame(rows)
-            return df
+            return pd.DataFrame(rows)
     except Exception as e:
-        print(f"[板块强度] 获取板块列表失败: {e}")
+        print(f"[板块强度] 降级API获取失败: {e}")
     return pd.DataFrame()
 
 
