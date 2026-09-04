@@ -145,6 +145,11 @@ def calc_sector_strength(sector_df: pd.DataFrame) -> pd.DataFrame:
 
     df = sector_df.copy()
 
+    # 确保数值列是数字类型
+    for col in ['change_pct', 'main_net_inflow', 'up_count', 'leading_stock_pct']:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+
     # 标准化各指标到0-100
     def normalize(series):
         if series.max() == series.min():
