@@ -160,6 +160,7 @@ class AIPredictor:
 
         # 保存元信息
         self.meta = {
+            "status": "ok",
             "trained_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "sample_count": len(X),
             "positive_count": int(y.sum()),
