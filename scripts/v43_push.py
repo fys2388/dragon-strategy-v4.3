@@ -273,18 +273,12 @@ def main():
         # AI打分过滤
         oversold_result["entries"] = ai_filter_entries(oversold_result.get("entries", []), "oversold")
         oversold_msg = build_oversold_message(oversold_result)
-        # 已精简：去掉智能分析
-        # 多维详情
-        if oversold_entries:
-            multi_detail = add_multi_dimension_detail(oversold_entries)
-            if multi_detail:
-                oversold_msg = oversold_msg + "\n" + multi_detail
+        oversold_entries = oversold_result.get("entries", [])
         print(oversold_msg)
         print("\n[OVERSOLD SUMMARY]", oversold_result.get("summary", ""))
         all_messages.append(oversold_msg)
 
         # 记录超跌反弹推荐股到绩效跟踪
-        oversold_entries = oversold_result.get("entries", [])
         if oversold_entries:
             oversold_time = oversold_result.get("scan_time", now_bjt().strftime("%Y-%m-%d %H:%M:%S"))
             oversold_regime = oversold_result.get("regime", "unknown")
@@ -319,8 +313,7 @@ def main():
         # AI打分过滤
         breakout_result["entries"] = ai_filter_entries(breakout_result.get("entries", []), "breakout")
         breakout_msg = build_breakout_message(breakout_result)
-        # 已精简：去掉智能分析
-        # 已精简：去掉多维详情
+        breakout_entries = breakout_result.get("entries", [])
         print(breakout_msg)
         print("\n[BREAKOUT SUMMARY]", breakout_result.get("summary", ""))
         all_messages.append(breakout_msg)
