@@ -221,7 +221,7 @@ def get_strong_sectors(top_n: int = 5) -> List[Dict[str, Any]]:
             "sector_code": row["sector_code"],
             "change_pct": round(row["change_pct"], 2),
             "strength_score": row["strength_score"],
-            "main_net_inflow_yi": round(row["main_net_inflow"] / 10000, 2) if row["main_net_inflow"] else 0,
+            "main_net_inflow_yi": round(row["main_net_inflow"] / 100000000, 2) if row["main_net_inflow"] else 0,
             "leading_stock": row["leading_stock"],
             "leading_stock_pct": round(row["leading_stock_pct"], 2),
             "up_count": int(row["up_count"]) if row["up_count"] else 0,

@@ -59,7 +59,7 @@ def get_fundamental(stock_code: str) -> Dict[str, Any]:
         data = resp.json()
         if data.get("data"):
             d = data["data"]
-            return {
+            result = {
                 "code": stock_code,
                 "name": d.get("f58", ""),
                 "pe": d.get("f162", 0),
@@ -73,6 +73,7 @@ def get_fundamental(stock_code: str) -> Dict[str, Any]:
                 "total_mv": d.get("f116", 0),
                 "circulating_mv": d.get("f117", 0),
             }
+            return get_fixer().fix_fundamental(result)
     except Exception as e:
         print(f"[基本面] Worker代理获取{stock_code}失败: {e}")
 
@@ -81,7 +82,7 @@ def get_fundamental(stock_code: str) -> Dict[str, Any]:
         data = resp.json()
         if data.get("data"):
             d = data["data"]
-            return {
+            result = {
                 "code": stock_code,
                 "name": d.get("f58", ""),
                 "pe": d.get("f162", 0),  # 市盈率(动)
@@ -95,6 +96,7 @@ def get_fundamental(stock_code: str) -> Dict[str, Any]:
                 "total_mv": d.get("f116", 0),  # 总市值
                 "circulating_mv": d.get("f117", 0),  # 流通市值
             }
+            return get_fixer().fix_fundamental(result)
     except Exception as e:
         print(f"[基本面] {stock_code} 获取失败: {e}")
     return {}
