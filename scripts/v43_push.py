@@ -87,19 +87,35 @@ def ai_filter_entries(entries: list, strategy_type: str = "") -> list:
 
 
 def add_multi_dimension_detail(entries: list) -> str:
-    """给推荐股票添加多维详情（资金面/基本面/消息面）。"""
+    """给推荐股票添加精简多维详情（一行摘要，只显示关键风险/机会）。"""
     if not entries:
         return ""
     try:
-        mfilter = init_multi_filter()
         details = []
         for e in entries:
             code = e.get("code", "")
             name = e.get("name", "")
             if code:
-                detail = mfilter.build_stock_detail(code, name)
-                if detail:
-                    details.append(f"\n  【{name}({code})多维分析】\n{detail}")
+                summary = []
+                try:
+                    from strategies.macd_resonance.moneyflow import check_moneyflow_trend
+                    mf = check_moneyflow_trend(code, days=5)
+                    trend = mf.get("trend", "unknown")
+                    if trend == "outflow":
+                        summary.append("🔴资金流出")
+                    elif trend == "strong_inflow":
+                        summary.append("🟢资金强流入")
+                except Exception:
+                    pass
+                try:
+                    from strategies.macd_resonance.news_monitor import get_news_sentiment
+                    news = get_news_sentiment(code)
+                    if news.get("bearish_count", 0) >= 2:
+                        summary.append(f"🔴利空{news['bearish_count']}条")
+                except Exception:
+                    pass
+                if summary:
+                    details.append(f"  ⚠️ {name}：{'、'.join(summary)}")
         return "\n".join(details)
     except Exception as e:
         print(f"⚠️ 多维详情生成失败: {e}")
