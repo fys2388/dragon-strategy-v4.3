@@ -499,69 +499,18 @@ class Scanner:
 
 
 def build_message(result: Dict) -> str:
-    """将扫描结果格式化为飞书消息。"""
-    now = now_bjt().strftime("%Y-%m-%d %H:%M")
-    lines = [f"📊 MACD多周期共振策略 盘中实时 {now}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"]
-
-    lines.append("【大盘环境】")
+    """将扫描结果格式化为飞书消息（极简版）。"""
     score = result.get("market_score", 0.0)
     can_open = result.get("can_open", False)
-    regime_label = result.get("regime_label", "")
-    param_name = ""
-    if result.get("adaptive_params"):
-        param_name = result["adaptive_params"].get("name", "")
-    lines.append(f"大盘评分：{score:.1f}/7分 | {'🔴可开仓' if can_open else '🟢观望'} | {regime_label}·{param_name}")
-    market_desc = result.get("market_desc", "")
-    for line in market_desc.split("\n")[:5]:
-        if line.strip():
-            lines.append(f"  {line}")
-    lines.append("")
-
-    lines.append("【重点推荐（多周期共振）】")
     entries = result.get("entries", [])
+
+    lines = [f"📊 MACD共振：大盘{score:.0f}/7 {'🔴可开仓' if can_open else '🟢观望'}"]
     if entries:
         for i, e in enumerate(entries, 1):
             levels = "+".join(e.get("resonance_levels", []))
-            lines.append(f"{i}. {e['name']}({e['code']}) | 现价{e['price']}元")
-            lines.append(f"   共振级别：{levels} | 得分{e['score']}")
-            lines.append(f"   理由：{e['reason']}")
-            lines.append("")
-        risk = result.get("risk_params", RISK)
-        single = RISK["total_capital"] * risk.get("position_pct", 0.25)
-        lines.append(f"💼 仓位建议（本金{RISK['total_capital']:.0f}元）")
-        lines.append(f"  单票≤{risk.get('position_pct', 0.25)*100:.0f}%（{single:.0f}元），最多{risk.get('max_positions', 2)}只")
-        lines.append(f"  止盈：+{risk.get('take_profit_1_pct', 0.1) * 100:.0f}%减半 / +{risk.get('take_profit_2_pct', 0.15) * 100:.0f}%清仓 | 止损：-{risk.get('stop_loss_pct', 0.05) * 100:.0f}%")
+            lines.append(f"  {i}. {e['name']}({e['code']}) {e['price']}元 {levels} 得分{e['score']}")
     else:
-        lines.append("  当前无符合多周期共振的标的，继续观望")
-    lines.append("")
-
-    # 持仓提醒（最高优先级区块）
-    if result.get("exit_signals"):
-        lines.append("【持仓提醒】")
-        icon = {"hard_stop": "🚨", "zero_axis_break": "🔴", "tf60_divergence": "🟠",
-                "take_profit_2": "💰", "take_profit_1": "💎"}
-        for s in result["exit_signals"]:
-            lines.append(f"{icon.get(s['signal_type'], '⚠️')} {s['name']}({s['code']})")
-            lines.append(f"   现价{s['current_price']} | 盈亏{s['profit_pct']:+.1f}%")
-            lines.append(f"   {s['reason']} → {s['suggestion']}")
-        lines.append("")
-
-    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    if result.get("diagnosis"):
-        lines.append(f"📈 诊断：{result['diagnosis']}")
-    lines.append("⚠️ 仅为策略信号，不构成投资建议，最终操作请自行判断")
-    now_full = now_bjt().strftime("%Y-%m-%d %H:%M:%S")
-    vstate = result.get("validation_state", "ok")
-    vtxt = {"ok": "✅正常", "switched": "⚠️已切换", "degraded": "⚠️部分异常"}.get(vstate, vstate)
-    regime = result.get("regime", "range_bound")
-    regime_txt = f"{regime}({REGIME_LABELS.get(regime, '')})"
-    ds_name = {"eastmoney": "东财(主)", "akshare": "AkShare(备1)", "sina": "新浪(备2)", "none": "无"}.get(result.get("data_source", "eastmoney"), result.get("data_source", "eastmoney"))
-    lines.append(f"📡 数据源：{ds_name} | 校验：{vtxt} | "
-                 f"市场环境：{regime_txt} | "
-                 f"扫描{result.get('scanned_count', 0)}只→过滤{result.get('passed_count', 0)}只→通过{result.get('resonance_count', 0)}只")
-    lines.append(f"⏱ 触发时间：北京时间{now_full} | 扫描耗时{result.get('scan_elapsed', 0)}s | "
-                 f"涨停{result.get('limit_up', 0)}家/跌停{result.get('limit_down', 0)}家 | "
-                 f"过滤后{result.get('passed_count', 0)}只→共振通过{result.get('resonance_count', 0)}只")
+        lines.append("  无推荐")
     return "\n".join(lines)
 
 

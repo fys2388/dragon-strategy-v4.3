@@ -342,33 +342,12 @@ class OversoldReboundScanner:
 
 
 def build_oversold_message(result: Dict) -> str:
-    """超跌反弹模式飞书消息。"""
-    now = now_bjt().strftime("%Y-%m-%d %H:%M")
-    regime_label = result.get("regime_label", "")
-    param_name = ""
-    if result.get("adaptive_params"):
-        param_name = result["adaptive_params"].get("name", "")
-    env_tag = f" | {regime_label}·{param_name}" if regime_label else ""
-    lines = [
-        f"🚀 超跌反弹策略 盘中实时 {now}{env_tag}",
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-        "",
-        "【超跌反弹推荐】",
-    ]
+    """超跌反弹策略飞书消息（极简版）。"""
     entries = result.get("entries", [])
-    if entries:
-        for i, e in enumerate(entries, 1):
-            lines.append(f"{i}. {e['name']}({e['code']}) | 现价{e['price']}元 | 今日+{e['today_gain_pct']}%")
-            lines.append(f"   20日跌幅{e['drop_20d_pct']}% | 量比{e['volume_ratio']} | 得分{e['score']}")
-            lines.append(f"   {e['reason']}")
-            lines.append("")
-        lines.append("💼 仓位建议（5000元本金）")
-        lines.append("  单票≤1500-2000元（30-40%），最多2-3只")
-        lines.append("  止盈：+10%减半 / +15%清仓 | 止损：-5%")
-    else:
-        lines.append("  当前无符合超跌反弹的标的，继续观望")
-    lines.append("")
-    lines.append(f"📈 诊断：{result.get('diagnosis', '')}")
-    lines.append("⚠️ 仅为策略信号，不构成投资建议，最终操作请自行判断")
-    lines.append(f"⏱ 触发时间：北京时间{now} | 扫描耗时{result.get('scan_elapsed', 0)}s")
+    if not entries:
+        return "🚀 超跌反弹：无推荐"
+    lines = ["🚀 超跌反弹："]
+    for i, e in enumerate(entries, 1):
+        lines.append(f"  {i}. {e['name']}({e['code']}) {e['price']}元 +{e['today_gain_pct']}% 得分{e['score']}")
     return "\n".join(lines)
+

@@ -198,30 +198,12 @@ class BreakoutScanner:
 
 
 def build_breakout_message(result: Dict) -> str:
-    """趋势突破策略飞书消息。"""
-    now = now_bjt().strftime("%Y-%m-%d %H:%M")
-    lines = [
-        f"🚀 趋势突破策略 盘中实时 {now}",
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-        "",
-        "【趋势突破推荐】",
-    ]
-
+    """趋势突破策略飞书消息（极简版）。"""
     entries = result.get("entries", [])
-    if entries:
-        for i, e in enumerate(entries, 1):
-            lines.append(f"{i}. {e['name']}({e['code']}) | 现价{e['price']}元 | 今日+{e['today_gain_pct']}%")
-            lines.append(f"   突破20日新高{e['breakout_high']}元 | 量比{e['volume_ratio']} | 得分{e['score']}")
-            lines.append(f"   {e['reason']}")
-            lines.append("")
-        lines.append("💼 仓位建议（5000元本金）")
-        lines.append("  单票≤1250元（25%），最多2只")
-        lines.append("  止盈：+8%清仓 | 止损：-4%（突破策略假突破多，止损更严）")
-    else:
-        lines.append("  当前无符合趋势突破的标的，继续观望")
+    if not entries:
+        return "🚀 趋势突破：无推荐"
 
-    lines.append("")
-    lines.append(f"📈 诊断：{result.get('diagnosis', '')}")
-    lines.append("⚠️ 仅为策略信号，不构成投资建议，最终操作请自行判断")
-    lines.append(f"⏱ 触发时间：北京时间{now} | 扫描耗时{result.get('scan_elapsed', 0)}s")
+    lines = ["🚀 趋势突破："]
+    for i, e in enumerate(entries, 1):
+        lines.append(f"  {i}. {e['name']}({e['code']}) {e['price']}元 +{e['today_gain_pct']}% 得分{e['score']}")
     return "\n".join(lines)

@@ -273,17 +273,7 @@ def main():
         # AI打分过滤
         oversold_result["entries"] = ai_filter_entries(oversold_result.get("entries", []), "oversold")
         oversold_msg = build_oversold_message(oversold_result)
-        # 智能分析（如果有推荐股票）
-        oversold_entries = oversold_result.get("entries", [])
-        if oversold_entries:
-            try:
-                analyzer = StockAnalyzer()
-                analyzed = analyzer.analyze_batch(oversold_entries)
-                analysis_msg = build_analysis_message(analyzed)
-                if analysis_msg:
-                    oversold_msg = oversold_msg + analysis_msg
-            except Exception as e:
-                print(f"⚠️ 超跌反弹智能分析失败: {e}")
+        # 已精简：去掉智能分析
         # 多维详情
         if oversold_entries:
             multi_detail = add_multi_dimension_detail(oversold_entries)
@@ -329,22 +319,8 @@ def main():
         # AI打分过滤
         breakout_result["entries"] = ai_filter_entries(breakout_result.get("entries", []), "breakout")
         breakout_msg = build_breakout_message(breakout_result)
-        # 智能分析
-        breakout_entries = breakout_result.get("entries", [])
-        if breakout_entries:
-            try:
-                analyzer = StockAnalyzer()
-                analyzed = analyzer.analyze_batch(breakout_entries)
-                analysis_msg = build_analysis_message(analyzed)
-                if analysis_msg:
-                    breakout_msg = breakout_msg + analysis_msg
-            except Exception as e:
-                print(f"⚠️ 趋势突破智能分析失败: {e}")
-        # 多维详情
-        if breakout_entries:
-            multi_detail = add_multi_dimension_detail(breakout_entries)
-            if multi_detail:
-                breakout_msg = breakout_msg + "\n" + multi_detail
+        # 已精简：去掉智能分析
+        # 已精简：去掉多维详情
         print(breakout_msg)
         print("\n[BREAKOUT SUMMARY]", breakout_result.get("summary", ""))
         all_messages.append(breakout_msg)
@@ -377,14 +353,7 @@ def main():
     else:
         print(f"✅ 今日推荐{total_recommendations}只，系统状态正常")
 
-    # 获取强势板块
-    sector_report = ""
-    try:
-        strong_sectors = get_strong_sectors(top_n=5)
-        if strong_sectors:
-            sector_report = build_sector_report(strong_sectors) + "\n\n"
-    except Exception as e:
-        print(f"⚠️ 板块强度获取失败: {e}")
+    sector_report = ""  # 已精简：去掉强势板块
 
     # 获取市场聚类状态
     cluster_info = get_market_cluster_info()
