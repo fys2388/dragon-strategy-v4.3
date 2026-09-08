@@ -39,6 +39,36 @@ class BreakoutScanner:
     def __init__(self):
         self.base_dir = ds.os.path.dirname(ds.os.path.dirname(ds.os.path.dirname(ds.os.path.abspath(__file__))))
         self.quality_pool = self._load_quality_pool()
+        self.cooldown_codes = self._load_cooldown_codes()
+
+    def _load_cooldown_codes(self) -> set:
+        """加载冷却期股票（最近10天内被止损的股票不再推荐）。"""
+        import json as _json
+        from datetime import datetime, timedelta
+        tracking_file = ds.os.path.join(self.base_dir, 'data', 'tracking.jsonl')
+        cooldown = set()
+        try:
+            if ds.os.path.exists(tracking_file):
+                cutoff = (datetime.now() - timedelta(days=10)).strftime('%Y-%m-%d')
+                with open(tracking_file, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            rec = _json.loads(line)
+                            if rec.get('status') == 'completed':
+                                day5 = rec.get('day5_return_pct')
+                                day10 = rec.get('day10_return_pct')
+                                if (day5 is not None and day5 < -3) or (day10 is not None and day10 < -3):
+                                    scan_date = str(rec.get('scan_time', ''))[:10]
+                                    if scan_date >= cutoff:
+                                        cooldown.add(rec.get('code', ''))
+                        except Exception:
+                            continue
+        except Exception:
+            pass
+        return cooldown
 
     def _load_quality_pool(self) -> set:
         pool_file = ds.os.path.join(self.base_dir, "data", "quality_pool.json")
@@ -203,6 +233,9 @@ class BreakoutScanner:
             if price < HARD_FILTERS["price_min"] or price > HARD_FILTERS["price_max"]:
                 continue
             if cap < HARD_FILTERS["cap_min_yi"] or cap > HARD_FILTERS["cap_max_yi"]:
+                continue
+            # 融合优化：同股冷却期（最近10天止损过的股票不再推荐）
+            if code in self.cooldown_codes:
                 continue
             candidates.append(s)
 

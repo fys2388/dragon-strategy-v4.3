@@ -169,9 +169,32 @@ class PositionMonitor:
             total_cost += cost
             total_pnl += pnl
 
-            # 止损止盈检查
-            stop_loss_price = entry_price * (1 - pos.get("stop_loss_pct", 0.05)) if entry_price > 0 else 0
+            # 止损止盈检查（含移动止盈Trailing Stop）
+            base_stop_loss = entry_price * (1 - pos.get("stop_loss_pct", 0.05)) if entry_price > 0 else 0
             take_profit_price = entry_price * (1 + pos.get("take_profit_pct", 0.08)) if entry_price > 0 else 0
+
+            # 移动止盈：获取持仓期间最高价，动态调整止损线
+            trailing_stop_price = base_stop_loss
+            highest_since_entry = current_price
+            try:
+                from . import data_source as _ds
+                _df = _ds.get_kline_daily(code, count=60)
+                if not _df.empty and len(_df) > 5:
+                    _closes = _df["close"].astype(float).tolist()
+                    # 取最近30天最高价作为持仓期间最高价参考
+                    highest_since_entry = max(_closes[-30:]) if len(_closes) >= 30 else max(_closes)
+                    pnl_at_high = (highest_since_entry - entry_price) / entry_price * 100 if entry_price > 0 else 0
+                    if pnl_at_high >= 8:
+                        # 盈利超过8%后，从最高价回撤3%卖出（让利润奔跑）
+                        trailing_stop_price = highest_since_entry * 0.97
+                    elif pnl_at_high >= 5:
+                        # 盈利超过5%后，止损线上移到成本价（保本）
+                        trailing_stop_price = entry_price
+            except Exception:
+                pass
+
+            # 实际止损价取基础止损和移动止损的较高者
+            stop_loss_price = max(base_stop_loss, trailing_stop_price) if entry_price > 0 else 0
 
             # 买卖一致性检查（黄阳原则）
             buy_reason_check = self._check_buy_reason(pos, current_price)
@@ -223,6 +246,8 @@ class PositionMonitor:
                 "alert_level": alert_level,
                 "buy_reason_valid": buy_reason_check["valid"],
                 "buy_reason_detail": buy_reason_check["reason"],
+                "trailing_active": trailing_stop_price > base_stop_loss if entry_price > 0 else False,
+                "highest_since_entry": round(highest_since_entry, 2),
             })
 
         # 总仓位检查
@@ -268,7 +293,10 @@ class PositionMonitor:
             lines.append(f"  {pos['name']}({pos['code']}) {pos['shares']}股")
             lines.append(f"    现价{pos['current_price']:.2f}元 | 成本{pos['entry_price']:.2f}元 | {pnl_color}{pos['pnl_pct']}% ({pos['pnl']}元)")
             if pos.get("stop_loss_price", 0) > 0:
-                lines.append(f"    止损{pos['stop_loss_price']:.2f}元 | 止盈{pos['take_profit_price']:.2f}元 | {pos['status']}")
+                trailing_note = ""
+                if pos.get("trailing_active"):
+                    trailing_note = " [移动止盈中]"
+                lines.append(f"    止损{pos['stop_loss_price']:.2f}元 | 止盈{pos['take_profit_price']:.2f}元 | {pos['status']}{trailing_note}")
             # 买卖一致性检查（黄阳原则）
             if not pos.get("buy_reason_valid", True):
                 lines.append(f"    🟡 买卖一致性：{pos.get('buy_reason_detail', '买入理由消失')}")
