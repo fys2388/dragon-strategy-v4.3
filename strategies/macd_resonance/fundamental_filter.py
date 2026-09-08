@@ -19,6 +19,15 @@ from typing import Dict, List, Any, Optional
 import pandas as pd
 import requests
 
+try:
+    from .data_quality_fixer import get_fixer
+except ImportError:
+    def get_fixer():
+        class _DummyFixer:
+            def fix_fundamental(self, data):
+                return data
+        return _DummyFixer()
+
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CACHE_DIR = os.path.join(BASE_DIR, "data", "cache", "fundamental")
 os.makedirs(CACHE_DIR, exist_ok=True)
