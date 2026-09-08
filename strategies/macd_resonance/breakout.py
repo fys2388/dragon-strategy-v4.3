@@ -39,6 +39,7 @@ class BreakoutScanner:
     def __init__(self):
         self.base_dir = ds.os.path.dirname(ds.os.path.dirname(ds.os.path.dirname(ds.os.path.abspath(__file__))))
         self.quality_pool = self._load_quality_pool()
+        self.optimized_params = self._load_optimized_params()
         self.cooldown_codes = self._load_cooldown_codes()
 
     def _load_cooldown_codes(self) -> set:
@@ -49,7 +50,8 @@ class BreakoutScanner:
         cooldown = set()
         try:
             if ds.os.path.exists(tracking_file):
-                cutoff = (datetime.now() - timedelta(days=10)).strftime('%Y-%m-%d')
+                cooldown_days = self.optimized_params.get('cooldown_days', 10)
+                cutoff = (datetime.now() - timedelta(days=cooldown_days)).strftime('%Y-%m-%d')
                 with open(tracking_file, 'r', encoding='utf-8') as f:
                     for line in f:
                         line = line.strip()
@@ -69,6 +71,25 @@ class BreakoutScanner:
         except Exception:
             pass
         return cooldown
+
+    def _load_optimized_params(self) -> dict:
+        """加载Agent优化的参数（周度优化器自动调整）。"""
+        import json as _json
+        state_file = ds.os.path.join(self.base_dir, 'data', 'optimization_state.json')
+        default_params = {
+            'volume_ratio_min': 1.5,
+            'min_score': 40,
+            'cooldown_days': 10,
+        }
+        try:
+            if ds.os.path.exists(state_file):
+                with open(state_file, 'r', encoding='utf-8') as f:
+                    state = _json.load(f)
+                optimized = state.get('current_params', {}).get('breakout', {})
+                return {**default_params, **optimized}
+        except Exception:
+            pass
+        return default_params
 
     def _load_quality_pool(self) -> set:
         pool_file = ds.os.path.join(self.base_dir, "data", "quality_pool.json")
@@ -252,8 +273,9 @@ class BreakoutScanner:
             if not s.get("is_breakout"):
                 reject_reasons["未突破20日新高"] += 1
                 continue
-            if s.get("volume_ratio", 0) < 1.5:
-                reject_reasons[f"量比{s.get('volume_ratio', 0):.1f}<1.5"] += 1
+            vr_min = self.optimized_params.get('volume_ratio_min', 1.5)
+            if s.get("volume_ratio", 0) < vr_min:
+                reject_reasons[f"量比{s.get('volume_ratio', 0):.1f}<{vr_min}"] += 1
                 continue
             # 融合：熊猫有财核心规则 - 收盘价必须>20日均线
             if not s.get("above_ma20"):

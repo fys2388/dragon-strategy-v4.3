@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""每周策略回测与参数优化脚本（增强版）。
+"""周度优化报告推送脚本。
 
-每周日运行，基于历史跟踪数据自动优化策略参数。
-包含：突破策略参数进化、冷却期自适应、周度优化报告。
+每周日收盘后自动运行，生成Agent自主优化报告并推送到飞书。
+包含：本周策略表现、优化建议、已自动应用的参数调整。
 """
 from __future__ import annotations
 
@@ -11,13 +11,15 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from strategies.macd_resonance.weekly_optimizer import generate_weekly_report  # noqa: E402
+from strategies.macd_resonance.weekly_optimizer import generate_weekly_report
 
 
 def send_feishu(text: str):
+    """推送到飞书。"""
     webhook = os.environ.get("FEISHU_WEBHOOK_URL", "")
     if not webhook:
         print("⚠️ 未配置 FEISHU_WEBHOOK_URL")
+        print(text)
         return
     import requests
     try:
@@ -29,15 +31,15 @@ def send_feishu(text: str):
 
 def main():
     print("=" * 50)
-    print("🔄 每周策略优化（Agent自主闭环）")
+    print("🔄 生成周度策略优化报告")
     print("=" * 50)
 
     report = generate_weekly_report()
-    print("\n" + report)
+    print(report)
+    print()
 
-    # 推送飞书
-    if os.environ.get("PUSH_FEISHU", "true").lower() == "true":
-        send_feishu(report)
+    send_feishu(report)
+    print("✅ 周度优化报告完成")
 
 
 if __name__ == "__main__":
