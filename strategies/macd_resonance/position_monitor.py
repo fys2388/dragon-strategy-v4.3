@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""持仓监控模块。
+"""持仓监控模块（融合黄阳买卖一致性原则）。
 
 核心能力：
 1. 读取用户实际持仓配置
@@ -7,6 +7,7 @@
 3. 计算盈亏、止损止盈距离
 4. 触发止损/止盈预警推送
 5. 与风险控制器联动（持仓数量限制、回撤控制）
+6. 买卖一致性检查（黄阳原则）：买入理由消失就卖出，不因涨跌改变判断
 """
 from __future__ import annotations
 
@@ -52,6 +53,89 @@ class PositionMonitor:
                 print(f"⚠️ 获取{pos['name']}现价失败: {e}")
         return prices
 
+    def _check_buy_reason(self, pos: Dict, current_price: float) -> Dict[str, Any]:
+        """买卖一致性检查（黄阳原则）：买入理由消失就卖出。
+
+        黄阳核心观点：买入一只股票是因为某个理由（低估/成长/趋势突破），
+        当这个理由消失时就应该卖出，不能因为涨了就舍不得卖，
+        也不能因为跌了就死扛。
+
+        检查逻辑：
+        - 突破策略：检查是否仍在20日均线之上、是否仍突破20日新高
+        - MACD共振：检查MACD是否仍金叉、是否仍在零轴之上
+        - 超跌反弹：检查反弹是否失效（跌破支撑位）
+        - 通用：检查20日均线是否跌破（熊猫有财核心规则）
+
+        Returns:
+            {valid: bool, reason: str, disappeared: [消失的理由]}
+        """
+        from . import data_source as ds
+        code = pos["code"]
+        name = pos["name"]
+        buy_reason = pos.get("buy_reason", {})
+        strategy = buy_reason.get("strategy", "unknown")
+
+        disappeared = []
+        try:
+            df = ds.get_kline_daily(code, count=30)
+            if df.empty or len(df) < 20:
+                return {"valid": True, "reason": "数据不足，无法检查", "disappeared": []}
+
+            closes = df["close"].astype(float)
+            current = float(closes.iloc[-1])
+            ma20 = float(closes.iloc[-20:].mean())
+
+            # 通用检查：20日均线（熊猫有财核心规则）
+            if current < ma20:
+                disappeared.append(f"跌破20日均线(现价{current:.2f}<MA20 {ma20:.2f})")
+
+            # 突破策略检查
+            if strategy == "breakout":
+                highs = df["high"].astype(float)
+                recent_high = float(highs.iloc[-21:-1].max()) if len(highs) >= 21 else float(highs.max())
+                if current < recent_high * 0.97:
+                    disappeared.append(f"跌破突破位(现价{current:.2f}<突破位{recent_high:.2f}的97%)")
+                # 量能检查
+                volumes = df["volume"].astype(float)
+                if len(volumes) >= 6:
+                    avg_vol_5d = float(volumes.iloc[-6:-1].mean())
+                    today_vol = float(volumes.iloc[-1])
+                    if today_vol < avg_vol_5d * 0.7:
+                        disappeared.append("量能萎缩(今日成交量<5日均量70%)")
+
+            # MACD共振策略检查
+            elif strategy == "macd_resonance":
+                try:
+                    from .macd_indicator import calc_macd
+                    macd_result = calc_macd(closes.tolist())
+                    dif = macd_result.get("dif", [0])[-1]
+                    dea = macd_result.get("dea", [0])[-1]
+                    if dif < dea:
+                        disappeared.append("MACD死叉(DIF<DEA)")
+                    if dif < 0:
+                        disappeared.append("DIF跌破零轴")
+                except Exception:
+                    pass
+
+            # 超跌反弹策略检查
+            elif strategy == "oversold":
+                # 反弹失效：从低点反弹后又跌回低点附近
+                lows = df["low"].astype(float)
+                recent_low = float(lows.iloc[-20:].min())
+                if current < recent_low * 1.03:
+                    disappeared.append(f"反弹失效(现价{current:.2f}接近低点{recent_low:.2f})")
+
+        except Exception as e:
+            return {"valid": True, "reason": f"检查异常: {e}", "disappeared": []}
+
+        if disappeared:
+            return {
+                "valid": False,
+                "reason": f"买入理由消失：{'、'.join(disappeared)}",
+                "disappeared": disappeared,
+            }
+        return {"valid": True, "reason": "买入理由仍然成立", "disappeared": []}
+
     def monitor(self) -> Dict[str, Any]:
         """监控持仓，返回预警信息。"""
         prices = self.get_current_prices()
@@ -89,6 +173,9 @@ class PositionMonitor:
             stop_loss_price = entry_price * (1 - pos.get("stop_loss_pct", 0.05)) if entry_price > 0 else 0
             take_profit_price = entry_price * (1 + pos.get("take_profit_pct", 0.08)) if entry_price > 0 else 0
 
+            # 买卖一致性检查（黄阳原则）
+            buy_reason_check = self._check_buy_reason(pos, current_price)
+
             status = "持有"
             alert_level = None
 
@@ -99,6 +186,14 @@ class PositionMonitor:
                     alerts.append({
                         "code": code, "name": name, "level": "stop_loss",
                         "message": f"{name}({code})现价{current_price:.2f}元，已跌破止损价{stop_loss_price:.2f}元（亏损{pnl_pct:.1f}%），建议止损！",
+                    })
+                elif not buy_reason_check["valid"]:
+                    # 黄阳买卖一致性：买入理由消失，优先级仅次于硬止损
+                    status = "🟡 买入理由消失"
+                    alert_level = "buy_reason_gone"
+                    alerts.append({
+                        "code": code, "name": name, "level": "buy_reason_gone",
+                        "message": f"{name}({code}){buy_reason_check['reason']}，按买卖一致性原则建议卖出（不因涨跌改变判断）",
                     })
                 elif current_price >= take_profit_price:
                     status = "🟢 达到止盈"
@@ -126,6 +221,8 @@ class PositionMonitor:
                 "take_profit_price": round(take_profit_price, 2),
                 "status": status,
                 "alert_level": alert_level,
+                "buy_reason_valid": buy_reason_check["valid"],
+                "buy_reason_detail": buy_reason_check["reason"],
             })
 
         # 总仓位检查
@@ -172,6 +269,9 @@ class PositionMonitor:
             lines.append(f"    现价{pos['current_price']:.2f}元 | 成本{pos['entry_price']:.2f}元 | {pnl_color}{pos['pnl_pct']}% ({pos['pnl']}元)")
             if pos.get("stop_loss_price", 0) > 0:
                 lines.append(f"    止损{pos['stop_loss_price']:.2f}元 | 止盈{pos['take_profit_price']:.2f}元 | {pos['status']}")
+            # 买卖一致性检查（黄阳原则）
+            if not pos.get("buy_reason_valid", True):
+                lines.append(f"    🟡 买卖一致性：{pos.get('buy_reason_detail', '买入理由消失')}")
 
         # 预警
         alerts = monitor_result.get("alerts", [])

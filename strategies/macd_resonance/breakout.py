@@ -236,13 +236,42 @@ class BreakoutScanner:
         result["passed_count"] = len(breakout_list)
         top_rejects = [r for r, _ in reject_reasons.most_common(3)]
 
-        # 5. 按综合打分排序（融合量价+位置），取前5
+        # 5. 黄阳五维基本面打分（融合黄阳价值投资体系）
+        # 只对突破条件通过的股票获取基本面，控制耗时
+        try:
+            from .fundamental_filter import batch_get_fundamental
+            from .huangyang_scorer import get_huangyang_scorer
+            hy_scorer = get_huangyang_scorer()
+            breakout_codes = [s["code"] for s in breakout_list]
+            fundamentals = batch_get_fundamental(breakout_codes)
+            for s in breakout_list:
+                fund = fundamentals.get(s["code"], {})
+                if fund:
+                    hy_result = hy_scorer.score(s["name"], fund)
+                    s["huangyang_score"] = hy_result["total_score"]
+                    s["huangyang_grade"] = hy_result["grade"]
+                    s["huangyang_summary"] = hy_result["summary"]
+                    s["fundamental_data"] = fund
+                else:
+                    s["huangyang_score"] = 50  # 无数据时中性分
+                    s["huangyang_grade"] = "未知"
+                    s["huangyang_summary"] = "基本面数据缺失"
+        except Exception as e:
+            LOG.warning(f"[趋势突破] 黄阳五维打分失败: {e}，使用中性分")
+            for s in breakout_list:
+                s["huangyang_score"] = 50
+                s["huangyang_grade"] = "未知"
+                s["huangyang_summary"] = ""
+
+        # 6. 综合打分排序（融合熊猫有财技术面 + 黄阳基本面）
         for s in breakout_list:
-            s["composite_score"] = self._calc_composite_score(s)
+            tech_score = self._calc_composite_score(s)
+            # 技术面60% + 黄阳基本面40%
+            s["composite_score"] = round(tech_score * 0.6 + s.get("huangyang_score", 50) * 0.4, 1)
         breakout_list.sort(key=lambda x: x.get("composite_score", 0), reverse=True)
         top = breakout_list[:5]
 
-        # 6. 生成推荐条目
+        # 7. 生成推荐条目
         entries = []
         for s in top:
             # 构建推荐理由（融合位置和量价信息）
@@ -270,6 +299,8 @@ class BreakoutScanner:
                 "breakout_high": round(s.get("breakout_high", 0), 2),
                 "position_type": s.get("position_type", "unknown"),
                 "vol_price_health": s.get("vol_price_health", "unknown"),
+                "huangyang_score": s.get("huangyang_score", 50),
+                "huangyang_grade": s.get("huangyang_grade", "未知"),
                 "reason": "，".join(reason_parts),
             })
 
@@ -289,7 +320,7 @@ class BreakoutScanner:
 
 
 def build_breakout_message(result: Dict) -> str:
-    """趋势突破策略飞书消息（极简版）。"""
+    """趋势突破策略飞书消息（极简版，融合黄阳基本面评级）。"""
     entries = result.get("entries", [])
     if not entries:
         return "🚀 趋势突破：无推荐"
@@ -309,5 +340,9 @@ def build_breakout_message(result: Dict) -> str:
         elif e.get("vol_price_health") == "weak":
             vp_tag = "缩量⚠️"
         tags = f"[{pos_tag}{vp_tag}]" if pos_tag or vp_tag else ""
-        lines.append(f"  {i}. {e['name']}({e['code']}) {e['price']}元 +{e['today_gain_pct']}% 得分{e['score']}{tags}")
+        # 黄阳基本面评级
+        hy_grade = e.get("huangyang_grade", "")
+        hy_tag = f"基本面{hy_grade}" if hy_grade and hy_grade != "未知" else ""
+        all_tags = f"{tags}{hy_tag}" if hy_tag else tags
+        lines.append(f"  {i}. {e['name']}({e['code']}) {e['price']}元 +{e['today_gain_pct']}% 得分{e['score']}{all_tags}")
     return "\n".join(lines)
