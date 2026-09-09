@@ -293,6 +293,13 @@ def generate_weekly_report() -> str:
     # 生成优化建议
     suggestions = generate_optimization_suggestions(perf, state)
 
+    # 用户反馈分析
+    try:
+        from .user_feedback import analyze_feedback
+        feedback_result = analyze_feedback(days=7)
+    except Exception:
+        feedback_result = {"status": "error", "message": "反馈分析失败"}
+
     # 应用可自动应用的建议
     state = apply_suggestions(suggestions, state)
 
@@ -346,6 +353,18 @@ def generate_weekly_report() -> str:
         lines.append("✅ 已自动应用：")
         for a in applied:
             lines.append(f"  • {a['param']}: {a['old']} → {a['new']}")
+
+    # 用户反馈
+    if feedback_result.get("status") == "ok" and feedback_result.get("total", 0) > 0:
+        lines.append("")
+        lines.append("💬 用户反馈（本周）：")
+        lines.append(f"  正面{feedback_result['positive']}条 | 负面{feedback_result['negative']}条 | 偏好{feedback_result['preference']}条")
+        if feedback_result.get("suggestions"):
+            for sug in feedback_result["suggestions"]:
+                lines.append(f"  • {sug}")
+    elif feedback_result.get("status") == "no_feedback":
+        lines.append("")
+        lines.append("💬 用户反馈：暂无（可在豆包说'反馈：...'记录）")
 
     # 当前参数
     lines.append("")

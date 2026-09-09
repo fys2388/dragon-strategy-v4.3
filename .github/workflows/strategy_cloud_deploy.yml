@@ -77,7 +77,7 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/tracking.jsonl data/optimization_state.json data/evolution_log.jsonl data/performance_summary.json data/weekly_optimization_report.json 2>/dev/null || true
+          git add data/tracking.jsonl data/optimization_state.json data/evolution_log.jsonl data/performance_summary.json data/weekly_optimization_report.json data/user_feedback.jsonl 2>/dev/null || true
           if git diff --cached --quiet; then
             echo "无学习数据变化，跳过提交"
           else
