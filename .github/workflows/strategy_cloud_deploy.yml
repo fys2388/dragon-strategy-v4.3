@@ -71,3 +71,17 @@ jobs:
           name: run-log-${{ github.run_id }}
           path: logs/
           if-no-files-found: warn
+
+      - name: 回传学习数据（Agent持续学习持久化）
+        if: always()
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/tracking.jsonl data/optimization_state.json data/evolution_log.jsonl data/performance_summary.json data/weekly_optimization_report.json 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "无学习数据变化，跳过提交"
+          else
+            git commit -m "Agent学习数据回传：tracking记录+优化参数+进化日志（自动）"
+            git push
+            echo "学习数据已回传仓库"
+          fi
