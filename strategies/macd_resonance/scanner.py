@@ -504,7 +504,7 @@ def build_message(result: Dict) -> str:
     can_open = result.get("can_open", False)
     entries = result.get("entries", [])
 
-    lines = [f"📊 MACD共振：大盘{score:.0f}/7 {'🔴可开仓' if can_open else '🟢观望'}"]
+    lines = [f"📊 MACD共振：大盘{score:.0f}/7 {'🔴可开仓' if can_open and score >= 4 else '🟡谨慎开仓' if can_open else '🟢观望'}"]
     if entries:
         for i, e in enumerate(entries, 1):
             levels = "+".join(e.get("resonance_levels", []))

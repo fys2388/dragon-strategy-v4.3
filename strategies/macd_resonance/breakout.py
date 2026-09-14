@@ -223,6 +223,23 @@ class BreakoutScanner:
             "scan_elapsed": 0.0,
         }
 
+        # 0. 大盘门控（修复：趋势突破也受大盘评分限制，避免弱势市场推太多）
+        from .market_gate import evaluate_market_gate
+        score, gate_desc, can_open = evaluate_market_gate()
+        result["market_score"] = score
+        result["can_open"] = can_open
+
+        # 大盘<3分：不推荐
+        if score < 3.0:
+            result["summary"] = f"大盘{score:.1f}/7分<3分，趋势突破暂停推荐"
+            result["diagnosis"] = f"大盘评分不足，仅观察不推荐"
+            result["scan_elapsed"] = round(time.time() - t0, 1)
+            return result
+
+        # 大盘3-4分（宽松档）：最多2只，最低得分提高到60
+        max_recommend = 2 if score < 4.0 else 5
+        min_score_override = 60 if score < 4.0 else 0
+
         # 1. 获取股票池
         from .data_validator import get_cached_pool, set_cached_pool
         try:
@@ -334,12 +351,15 @@ class BreakoutScanner:
             LOG.info(f"[趋势突破] 基本面硬过滤：{filtered_count}只基本面不达标被过滤")
 
         # 7. 综合打分排序（融合熊猫有财技术面 + 黄阳基本面）
+        # 门控：宽松档（3-4分）提高最低得分要求
+        if min_score_override > 0:
+            fundamental_filtered = [s for s in fundamental_filtered if s.get("composite_score", 0) >= min_score_override]
         for s in fundamental_filtered:
             tech_score = self._calc_composite_score(s)
             # 技术面60% + 黄阳基本面40%
             s["composite_score"] = round(tech_score * 0.6 + s.get("huangyang_score", 50) * 0.4, 1)
         fundamental_filtered.sort(key=lambda x: x.get("composite_score", 0), reverse=True)
-        top = fundamental_filtered[:5]
+        top = fundamental_filtered[:max_recommend]
 
         # 7. 生成推荐条目
         entries = []
