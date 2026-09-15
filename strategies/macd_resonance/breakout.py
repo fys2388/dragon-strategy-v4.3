@@ -72,10 +72,14 @@ class BreakoutScanner:
                     except (_json.JSONDecodeError, KeyError):
                         continue
         except Exception:
-            return 0
+            # tracking为空（新系统/数据丢失），默认大幅放宽
+            return 7
 
         # 从今天往前数，连续0推荐的天数
         hunger = 0
+        # 如果没有任何历史记录（新系统），默认7天饥饿度
+        if not daily_counts:
+            return 7
         today = now_bjt().date()
         for i in range(1, 15):  # 最多查15天
             day = (today - timedelta(days=i)).strftime('%Y-%m-%d')
@@ -286,7 +290,7 @@ class BreakoutScanner:
 
         # 大盘3-4分（宽松档）：最多2只，最低得分提高到60
         max_recommend = 2 if score < 4.0 else 5
-        min_score_override = 60 if score < 4.0 else 0
+        min_score_override = 50 if score < 4.0 else 0
 
         # === 推荐饥饿度自适应：连续0推荐时自动放宽，让Agent有学习素材 ===
         hunger_days = self._calc_hunger_days()
