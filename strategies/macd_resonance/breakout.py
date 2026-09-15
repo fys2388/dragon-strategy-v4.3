@@ -272,7 +272,7 @@ class BreakoutScanner:
         }
 
         # 0. 大盘门控（修复：趋势突破也受大盘评分限制，避免弱势市场推太多）
-        from .market_gate import evaluate_market_gate
+        from .market_gate import get_market_score as evaluate_market_gate
         score, gate_desc, can_open = evaluate_market_gate()
         result["market_score"] = score
         result["can_open"] = can_open
