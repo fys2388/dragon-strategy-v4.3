@@ -14,7 +14,7 @@ A 股 **MACD 多周期共振**短线选股系统（日线 + 60min + 30min + 15mi
 | GitHub | `fys2388/dragon-strategy-v4.3`（public，直接推 `main`） |
 | Python | 3.12.2 本地 / 3.11 GitHub Actions |
 | 依赖 | requests, pandas, numpy, akshare（`requirements.txt`） |
-| 测试 | 71 passed / **11 failed**（测试落后于代码，勿盲目改断言，见 `docs/HANDOFF.md` §6.0） |
+| 测试 | **92 passed / 0 failed**，约 1.6s，**全程 0 次真实网络请求** |
 
 ## 2. 铁律（违反会导致推送中断或撞车）
 
@@ -90,7 +90,8 @@ knowledge/                  知识库文档
 ```bash
 # 1. 改完先编译 + 跑全量单测
 python -m py_compile scripts/v43_push.py strategies/macd_resonance/scanner.py
-python -m pytest tests -q            # 当前基线 71 passed / 11 failed（11 项为已知过时测试，见 docs/HANDOFF.md §6.0）
+python -m pytest tests -q            # 当前基线 92 passed / 0 failed，约 1.6s
+#    出现任何 failed = 回归；耗时 >10s = 有单测在打真实行情接口（见坑 11）
 
 # 2. 提交（中文提交信息，与现有历史一致）
 git add <files> && git commit -m "feat: xxx"
@@ -160,6 +161,11 @@ gh api "repos/fys2388/dragon-strategy-v4.3/contents/scripts/v43_push.py" -H "Acc
 9. **调度器是单点**：Cloudflare Worker + 其 `GITHUB_TOKEN`。Worker 挂掉或 token 过期 = 静默停推，
    仓库里没有任何东西会告警。加监控是下一步该做的事。
 10. **`.workbuddy/` 是另一个代理留下的状态目录**（memory/automations），与本项目代码无关，别提交。
+11. **单测 mock 必须打到真正的请求入口**：有两处会绕过 `_request_get`——
+    `data_source._get_em_limit_pool_count()` 直接 `requests.get`；
+    `signal_engine.check_long_entry(mode="auto")` 实时调 `get_market_score()`（→ 东财行情）。
+    只 mock `_request_get` 会让单测发起真实 HTTP（实测 72 次/轮，拖慢到 40s）。
+    改单测后若 `pytest tests -q` 耗时 >10s，就是漏了 mock（修完见 `docs/HANDOFF.md` §6.0）。
 
 ## 9. 常见任务
 
@@ -174,7 +180,8 @@ gh api "repos/fys2388/dragon-strategy-v4.3/contents/scripts/v43_push.py" -H "Acc
 
 ## 10. 当前状态（截至本文件写入）
 
-- 远端 `main` 已同步本地。**测试基线 71 passed / 11 failed**（11 项为测试落后于代码，见 `docs/HANDOFF.md` §6.0）。
+- 远端 `main` 已同步本地。**测试基线 92 passed / 0 failed**（全离线、0 次真实网络请求，约 1.6s）；
+  原 11 项失败的根因与修复逐项记录在 `docs/HANDOFF.md` §6.0。
 - 盘前报告已并入 `strategy_cloud_deploy.yml` 的 `premarket` 档，`morning_noon_push.yml` 定时已停用。
 - 云端双分支已验证：`premarket` 与 `scan` 均推送成功（HTTP 200）。
 - 盘前守卫已改为纯时间判断（9:45 后跳过），不再依赖 `TRIGGER`。

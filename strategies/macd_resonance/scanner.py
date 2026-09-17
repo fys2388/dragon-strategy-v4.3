@@ -269,7 +269,7 @@ class Scanner:
             "data_source": "eastmoney",
             "validation_state": "ok",
             "validation_anomalies": [],
-            "regime": "range_bound",
+            "regime": "sideways",   # 未取到数据时的默认档，须与 market_regime.REGIME_LABELS 口径一致
             "data_error": False,
         }
         t0 = time.time()

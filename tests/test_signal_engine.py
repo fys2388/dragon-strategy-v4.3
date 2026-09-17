@@ -51,6 +51,14 @@ class TestSignalEngine(unittest.TestCase):
         self.engine = se_mod.SignalEngine()
         self.engine.base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         self.engine.portfolio_file = os.path.join(self.engine.base_dir, "portfolio_data.json")
+        # check_long_entry(mode="auto") 会实时取大盘评分（→ 东财行情接口）。
+        # 单测固定为「大盘 5 分」→ 标准档，既离线又行为确定。
+        self._gate = mock.patch("strategies.macd_resonance.market_gate.get_market_score",
+                                return_value=(5.0, "大盘OK", True))
+        self._gate.start()
+
+    def tearDown(self):
+        self._gate.stop()
 
     @mock.patch.object(se_mod.ds, "get_kline")
     @mock.patch.object(se_mod, "calc_macd", side_effect=fake_calc_macd)
@@ -113,7 +121,9 @@ class TestScannerGate(unittest.TestCase):
     @mock.patch("strategies.macd_resonance.scanner.send_feishu_alert", return_value=True)
     @mock.patch("strategies.macd_resonance.scanner.get_data_with_fallback",
                 return_value=(make_market_data(), "eastmoney"))
-    def test_empty_when_market_below_threshold(self, m, m_status, m_alert, m_score):
+    @mock.patch("strategies.macd_resonance.portfolio_manager.PortfolioManager.check_exit_signals",
+                return_value=[])
+    def test_empty_when_market_below_threshold(self, m_exit, m, m_status, m_alert, m_score):
         scanner = Scanner()
         scanner.base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         result = scanner.run()

@@ -76,20 +76,50 @@ class TestValidateMarketData(unittest.TestCase):
 
 
 class TestRegime(unittest.TestCase):
-    def test_strong_trend(self):
-        self.assertEqual(classify_regime(md(limit_up_count=90, limit_down_count=2)), "strong_trend")
-        self.assertEqual(classify_regime(md(limit_up_count=81, limit_down_count=4)), "strong_trend")
+    """classify_regime 当前 5 档口径（bull/bear/strong_rebound/sideways/extreme）。
 
-    def test_weak_trend(self):
-        self.assertEqual(classify_regime(md(limit_up_count=50, limit_down_count=5)), "weak_trend")
-        self.assertEqual(classify_regime(md(limit_up_count=30, limit_down_count=9)), "weak_trend")
+    口径已从早期的 strong_trend / weak_trend / range_bound 整体替换，
+    旧三档字符串在 market_regime.REGIME_LABELS 中已不存在。
+    """
 
-    def test_range_bound(self):
-        self.assertEqual(classify_regime(md(limit_up_count=20, limit_down_count=3)), "range_bound")
+    def test_extreme_by_limit_down(self):
+        # 跌停 >30 → 极端行情
+        self.assertEqual(classify_regime(md(limit_up_count=10, limit_down_count=31)), "extreme")
 
-    def test_extreme(self):
-        self.assertEqual(classify_regime(md(limit_up_count=10, limit_down_count=25)), "extreme")
-        self.assertEqual(classify_regime(md(limit_up_count=90, index_change_pct=3.5)), "extreme")
+    def test_extreme_by_index_swing(self):
+        # |涨跌幅| >3.5% 才算极端；边界值 3.5 不触发（代码用严格大于）
+        self.assertEqual(classify_regime(md(index_change_pct=4.0)), "extreme")
+        self.assertEqual(classify_regime(md(index_change_pct=-4.0)), "extreme")
+        self.assertNotEqual(classify_regime(md(index_change_pct=3.5)), "extreme")
+
+    def test_bull_market_by_trend(self):
+        # 指数上涨 + 涨停多 + 跌停少 + 放量
+        self.assertEqual(classify_regime(md(index_change_pct=0.8, limit_up_count=65,
+                                            limit_down_count=2, volume_yi=11000)), "bull_market")
+
+    def test_bull_market_by_emotion(self):
+        # 涨 >40 且 跌 <8 → 情绪偏强归牛市
+        self.assertEqual(classify_regime(md(limit_up_count=45, limit_down_count=3)), "bull_market")
+
+    def test_bear_market_by_trend(self):
+        # 指数下跌 + 涨停少 + 跌停多
+        self.assertEqual(classify_regime(md(index_change_pct=-0.8, limit_up_count=20,
+                                            limit_down_count=15)), "bear_market")
+
+    def test_bear_market_by_emotion(self):
+        # 跌 >8 → 情绪偏弱归熊市
+        self.assertEqual(classify_regime(md(limit_up_count=30, limit_down_count=9)), "bear_market")
+
+    def test_strong_rebound(self):
+        # 指数大涨 + 涨停激增（未达极端/未达牛市趋势条件）
+        self.assertEqual(classify_regime(md(index_change_pct=2.0, limit_up_count=55)), "strong_rebound")
+
+    def test_sideways_default(self):
+        # 中性区间：指数 ±0.5% 内、涨停 20-40、跌停 <8
+        self.assertEqual(classify_regime(md(limit_up_count=25, limit_down_count=3)), "sideways")
+
+    def test_none_data_returns_sideways(self):
+        self.assertEqual(classify_regime(None), "sideways")
 
 
 class TestSourceStatus(unittest.TestCase):
@@ -161,7 +191,7 @@ class TestScannerIntegration(unittest.TestCase):
         self.assertEqual(result["data_source"], "akshare")
         self.assertEqual(result["validation_state"], "switched")
         self.assertEqual(result["limit_up"], 45)
-        self.assertEqual(result["regime"], "weak_trend")
+        self.assertEqual(result["regime"], "bull_market")
         ma.assert_called()
 
     def test_ok_no_alert(self):
@@ -173,7 +203,7 @@ class TestScannerIntegration(unittest.TestCase):
             result = scanner.run()
         self.assertEqual(result["data_source"], "eastmoney")
         self.assertEqual(result["validation_state"], "ok")
-        self.assertEqual(result["regime"], "weak_trend")
+        self.assertEqual(result["regime"], "bull_market")
         ma.assert_not_called()
 
     def test_double_fail_pauses(self):
@@ -187,26 +217,10 @@ class TestScannerIntegration(unittest.TestCase):
         self.assertIn("策略暂停", result["summary"])
         self.assertEqual(result["entries"], [])
         ma.assert_called_once()
+        # 未取到数据 → regime 停在默认档 sideways（与 REGIME_LABELS 口径一致）
+        self.assertEqual(result["regime"], "sideways")
         # 门控不应被调用（不扫描）
         self.assertFalse(msc.called)
-
-
-class TestBuildMessageDataSourceLine(unittest.TestCase):
-    def test_data_source_line(self):
-        from strategies.macd_resonance.scanner import build_message
-        result = {
-            "market_score": 5.0, "can_open": True, "market_desc": "x",
-            "entries": [], "exit_signals": [],
-            "diagnosis": "", "scan_elapsed": 3.2,
-            "limit_up": 45, "limit_down": 2,
-            "scanned_count": 10, "passed_count": 6, "resonance_count": 1,
-            "recommend_count": 1, "data_source": "akshare",
-            "validation_state": "switched", "regime": "weak_trend",
-        }
-        msg = build_message(result)
-        self.assertIn("📡 数据源：AkShare(备1) | 校验：⚠️已切换", msg)
-        self.assertIn("市场环境：weak_trend(弱势)", msg)
-        self.assertIn("扫描10只→过滤6只→通过1只", msg)
 
 
 if __name__ == "__main__":

@@ -11,7 +11,7 @@
 |---|---|
 | 远端主分支 | `main`（直接推 main，无 PR 流程） |
 | 本地与远端 | 已同步，无未提交改动 |
-| 测试 | **71 passed / 11 failed**（测试落后于代码，明细见 §6.0） |
+| 测试 | **92 passed / 0 failed**（§6.0 的 11 项已修完，全程 0 次真实网络请求，~1.6s） |
 | 仓库可见性 | **public**（注意：不要把新凭据写进仓库） |
 | 本地代理 | 本机 git 推送必须 `-c http.proxy=http://127.0.0.1:7897` |
 | gh CLI | 已登录，token scope 含 `repo`，可读写私有仓库 API |
@@ -116,17 +116,32 @@
 
 ### P0 — 建议接手第一天就确认
 
-**6.0 测试套件是红的：71 passed / 11 failed**
-当前 `main` 的 11 项失败全部是「代码改了、测试没跟」，**不是代码回归**。
-接手前必须知悉：这套测试目前**不能**作为改动是否安全的判据。
+**6.0 测试套件已修绿：92 passed / 0 failed — ✅ 已修（2026-09-17）**
+接手时是 71 passed / 11 failed，全部是「代码改了、测试没跟」，**不是代码回归**。已逐项修完。
 
-| 失败用例 | 根因 | 建议修复 |
+| 失败用例 | 根因 | 实际修复 |
 |---|---|---|
-| `test_market_gate.py::TestLimitUpDown`（3 项） | **mock 目标漂移**：`get_limit_up_down_count()` 新增了第 1 步 `_get_em_limit_pool_count()`（东财官方涨跌停池 push2ex），该函数直接调 `requests.get`，**绕过了** `_request_get`。测试只 mock 了 `ds._request_get`，于是第 1 步打到真实东财、返回真实数据（如 47/0）并提前 return，后续断言全部落空 | 改 mock 目标为 `mock.patch("strategies.macd_resonance.data_source.requests.get", ...)`；或给 `_get_em_limit_pool_count` 抽出可注入的请求函数。修完这三项将完全离线，不再依赖真实行情 |
-| `test_market_gate.py::TestScannerDiagnosticLine::test_build_message_has_trigger_line` | **断言过期**：`build_message()` 输出已简化为 `📊 MACD共振：大盘5/7 🟢可开仓\n  无推荐`，不再包含 `⏱ 触发时间：北京时间`、`扫描耗时`、`涨停45家/跌停2家` | 先确认精简格式是否符合推送需求；若需保留触发时间，改 `scanner.py build_message()`，**不要**为了过测试而改断言 |
-| `test_data_validator.py::TestRegime`（4 项）+ `TestScannerIntegration`（2 项）+ `TestBuildMessageDataSourceLine`（1 项） | 市场环境分级阈值、数据源行文案变化，断言未同步 | 逐个对照 `data_validator.py` / `scanner.py` 当前实现修正断言 |
+| `TestLimitUpDown`（3 项） | **mock 目标漂移**：`get_limit_up_down_count()` 新增第 1 步 `_get_em_limit_pool_count()` 直接调 `requests.get`，**绕过** `_request_get`。测试只 mock 了 `_request_get`，第 1 步打到真实东财（返回 47/0）并提前 return，后续断言全废 | 新增 `_no_em_limit_pool()` 统一屏蔽第 1 步，让这 3 项回归它们原本要测的第 3 步（东财全A列表遍历）；**另补 2 项新用例**专测第 1 步（涨跌停池优先级 / 池失败降级），该函数此前零覆盖 |
+| `TestRegime`（4 项） | **口径整体替换**：`classify_regime()` 已从 `strong_trend/weak_trend/range_bound` 改为 `bull_market/bear_market/strong_rebound/sideways/extreme`，旧三档在 `REGIME_LABELS` 中不存在 | 按当前 5 档重写为 9 项，覆盖全部分支 + `None` 输入 + `abs(chg)>3.5` 严格大于的边界 |
+| `TestScannerIntegration`（2 项） | `regime` 实际值随新口径变为 `bull_market` | 断言改为 `bull_market`；「双源失败」用例补断言 `regime == "sideways"`（见下方代码修正） |
+| `TestScannerDiagnosticLine`（1 项） | **断言过期**：`build_message()` 在提交 `1fdc849`「推送极简版」中被**有意**精简，触发时间/扫描耗时/涨停跌停/数据源/校验/诊断行全部移除 | 重写为 `TestBuildMessage` 5 项，钉住极简版契约（🔴可开仓/🟡宽松/🟢观望三档、每只 1 行推荐、刻意不含诊断信息）。**未改 `scanner.py` 恢复旧文案**——那是用户自己的文案决定 |
+| `TestBuildMessageDataSourceLine`（1 项） | 同上，断言的是已被移除的三行 | 其「极简版不含数据源/校验行」契约并入 `TestBuildMessage.test_minimal_format_omits_diagnostics`；数据源/校验状态/regime 的产出契约由 `TestScannerIntegration` 覆盖。原类已删除（用例数 82 → 92） |
 
-**优先级判断**：不阻断线上推送，但会让后续所有改动失去回归保护。建议把「修这 11 项」作为接手后的第一个任务。
+**顺带修的一处代码**：`scanner.py` 初始结果模板里 `"regime": "range_bound"` 是过期默认值（该字符串已不在 `REGIME_LABELS`），改为 `"sideways"`。
+只影响「数据异常提前返回」的路径；正常扫描路径在 `run()` 内会被 `classify_regime()` 覆盖。
+
+**额外发现并修复：单测原本在打真实行情接口**
+逐文件封锁 `requests.get/post` 审计发现：`tests/test_signal_engine.py` 单独发起 **72 次真实 HTTP**（打东财）——
+`check_long_entry(mode="auto")` 会实时调 `get_market_score()`，而该测试没 mock。断网时该文件耗时 60s。
+已在 `TestSignalEngine.setUp` 固定 `get_market_score() → (5.0, …, True)`（标准档），
+并给 `TestScannerGate` 补 `PortfolioManager.check_exit_signals` mock。
+现在 **`tests/` 全程 0 次真实请求，92 项 1.6s 跑完**（原 40s）。
+
+回归判据（任一不满足 = 有 mock 漏了或改坏了）：
+```bash
+python -m pytest tests -q          # 应为 92 passed，耗时 ~1.6s
+# 出现任何 failed = 回归；耗时 >10s = 有单测在打真实行情接口
+```
 
 **6.1 盘前守卫空转 — ✅ 已修**
 守卫已从 `TRIGGER == "schedule" and hm >= 945` 改为纯时间判断 `mode == "premarket" and hm >= 945 → skip`，
@@ -176,8 +191,8 @@ git fetch origin && git status -sb
 
 # 2. 跑全量测试
 python -m pytest tests -q
-#    当前基线：71 passed / 11 failed。11 项是已知失败（§6.0），不要当成回归误判。
-#    若出现「新增」失败 → 才是你改坏了东西。
+#    当前基线：92 passed / 0 failed，约 1.6s，全程 0 次真实网络请求。
+#    出现任何 failed = 回归；耗时 >10s = 有单测漏了 mock、在打真实行情接口（见 §6.0）。
 
 # 3. 手动触发一次扫描 + 一次盘前，确认推送链路
 gh workflow run "V1.0 MACD多周期共振策略云推送" --repo fys2388/dragon-strategy-v4.3 -f test_mode=true
