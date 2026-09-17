@@ -173,8 +173,14 @@ gh api "repos/fys2388/dragon-strategy-v4.3/contents/scripts/v43_push.py" -H "Acc
    统计最近 3 个完整交易日的 `workflow_dispatch` 运行次数，异常才推飞书，正常时静默。
    为什么必须挂在 `schedule` 上：其它推送工作流本身也是 Worker 触发的，
    用它们监控 Worker 等于用停摆的系统监控停摆的系统。
-   改 `worker.js` 的节奏时**同步改** `scheduler_health_check.py` 的
-   `EXPECTED_PUSH_PER_DAY` / `EXPECTED_REVIEW_PER_DAY`，否则会出现「实际正常但天天告警」。
+    改 `worker.js` 的节奏时**同步改** `scheduler_health_check.py` 的
+    `EXPECTED_PUSH_PER_DAY` / `EXPECTED_REVIEW_PER_DAY`，否则会出现「实际正常但天天告警」。
+
+    ✅ 已封堵的盲区（2026-09-17）：`v43_push.py` 原先推送失败被吞（只判 `requests.post`
+    是否抛异常、且 `main()` 从不读返回值），webhook 失效时 workflow 仍绿、健康检查仍报正常。
+    现在校验飞书正文 `StatusCode/code`，推送未被接受即 `sys.exit(1)` 让 workflow 变红 →
+    被健康检查的 `failed_run` 抓到。另有可选 KV 心跳比对，可区分 Worker 停摆 / GitHub 未接单 /
+    dispatch 401（见 `docs/HANDOFF.md` §6.2.1 / §6.2.2）。
 10. **`.workbuddy/` 是另一个代理留下的状态目录**（memory/automations），与本项目代码无关，别提交。
 11. **单测 mock 必须打到真正的请求入口**：有两处会绕过 `_request_get`——
     `data_source._get_em_limit_pool_count()` 直接 `requests.get`；

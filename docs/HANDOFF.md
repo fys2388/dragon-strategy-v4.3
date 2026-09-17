@@ -173,16 +173,86 @@ Cloudflare Worker 挂掉、或其 `GITHUB_TOKEN` 过期 → **完全停推**。�
   首版把 API 失败当成 0 次，会半夜误报「Worker 停摆」让人去 Cloudflare 控制台白查一轮。
   现在 API 失败的日期不参与判定、表里显示 `❓API失败`。
 
+### 6.2.1 盲区已封堵：飞书送达判定（2026-09-17）
+
+首版的盲区是「workflow 结论 `success` 不等于飞书真的收到」。根因查出来有两条：
+
+1. `v43_push.py` 的 `_send_text` 只要 `requests.post` 不抛异常就 `return True`，
+   **完全忽略 HTTP 状态码和飞书正文的 `StatusCode`**。而飞书自定义机器人 webhook 被删除/停用时
+   HTTP 仍是 200，只有正文里的状态码非 0 —— 所以会打出「✅ 飞书推送完成，HTTP 200」却没送达。
+2. `main()` **从不读 `_send_text` 的返回值**，也没有任何 `sys.exit(1)`。
+
+即：webhook 失效 → 飞书返回 200 → workflow 绿 → 健康检查数到 10 次成功运行 → 报「✅ 正常」。
+用户可能连着几天一条都没收到，全程零告警。
+
+仓库里一共有 **4 个**推送函数踩了同一个坑，全部修掉：
+
+| 函数 | 触发路径 |
+|---|---|
+| `v43_push._send_text` | 盘中扫描报告（合并三策略为一条） |
+| `v43_push.send_feishu_alert` | 扫描超时 / 策略异常告警 |
+| `morning_noon_push.send_to_feishu` | 盘前 / 午盘报告，也是 9:45 守卫的**补发通道** |
+| `scheduler_health_check.push_feishu` | 健康检查自己的告警（监控本身也踩了同一个坑） |
+
+修法（不需要任何外部配置，仓库内改动即生效）：
+- 新增 `scripts/feishu_client.py` 的 `check_feishu(resp)`：同时校验 HTTP 200 + 正文
+  `StatusCode == 0`（v2）或 `code == 0`（v1）。零依赖、不 import requests，
+  `v43_push.py` 与 `morning_noon_push.py` 共用它，避免三份实现各自漂移。
+  `scheduler_health_check.py` 保留一份独立副本并加注释说明 —— 它的工作流只装 requests，
+  刻意不依赖策略代码，监控脚本不能因为策略包导入失败而失效。
+  **保守原则**：正文不是 JSON、或没有可识别的状态码字段时视为成功 —— 只在「确定失败了」时才失败，
+  避免飞书改格式造成误报中断推送。
+- `main()` 推送失败 → `_exit_on_push_failure()` → `sys.exit(1)` → workflow 变红。
+  退出调用**刻意放在 `main()` 末尾**（绩效跟踪更新之后）：那是当天唯一一次的更新，不能因推送失败被跳过。
+- `send_feishu_alert` / `push_premarket_report` 同样改为返回 bool。
+- `scheduler_health_check.py` 的 `push_feishu` 有**完全相同**的缺陷，一并修了 ——
+  它自己是监控，这条链断了等于静默失效。
+
+现在：推送失败 → 非零退出 → Actions 红点 + 健康检查的 `failed_run` 告警，双通道兜底。
+
+已核实工作流不会被非零退出拖坏（`.github/workflows/strategy_cloud_deploy.yml`）：
+`运行MACD多周期共振策略推送` 步骤没有 `|| true` 也没有 `continue-on-error`，
+所以 exit 1 会让 workflow 结论为 `failure`；而后面「上传运行日志」「回传学习数据」
+两个步骤都是 `if: always()`，**当天唯一一次的绩效跟踪更新不会因为推送失败被跳过**。
+
+### 6.2.2 已加：Worker KV 心跳比对（2026-09-17）
+
+`worker.js` 在每次 dispatch 成功/失败后往 Cloudflare KV 写一条 `{ts_ms, workflow, status}`，
+新增 `GET /health` 端点返回；`scheduler_health_check.py` 每天比对这份心跳与 GitHub 运行记录。
+
+这让三种**都表现为 `runs == 0`**、原来只能猜的故障第一次能被区分：
+
+| 告警分类 | 含义 | 去哪查 |
+|---|---|---|
+| `heartbeat_stale` | Worker 最近 6 小时内没有成功 dispatch 记录 | Worker 被暂停/删除，或 Cron 触发器丢失 |
+| `dispatch_no_run` | Worker 声称 dispatch 成功了，但 GitHub 侧 0 次运行 | GitHub 侧未接单（Actions 配额耗尽/服务异常），**Worker 不用动** |
+| `dispatch_failed` | dispatch 调用本身失败，心跳里带 HTTP 状态码 | 401/403 = `Secrets.GITHUB_TOKEN` 失效；404 = 工作流文件被改名 |
+
+配套改动：
+- `wrangler.toml.example` 增加 `kv_namespaces` 绑定 + 创建步骤 + `WORKER_HEALTH_URL` 说明。
+- `.github/workflows/scheduler_health_check.yml` 增加可选 env `WORKER_HEALTH_URL`。
+- KV 写失败**只记日志、不阻断主流程**（`recordHeartbeat` 内部吞异常）——
+  观测手段不能反过来导致当天交易推送丢失。
+- 未配 KV 时 `/health` 仍正常响应（`kvConfigured: false`），
+  所以「还没升级 KV」和「Worker 挂了」也能区分开。
+
 手动验证：
 ```bash
-python scripts/scheduler_health_check.py --dry-run        # 只打印不推送（本地需 GITHUB_TOKEN）
-python scripts/scheduler_health_check.py --selftest       # 打印模拟告警文案，无网络请求
+python scripts/scheduler_health_check.py --dry-run            # 只打印不推送（本地需 GITHUB_TOKEN）
+python scripts/scheduler_health_check.py --selftest           # 打印模拟告警文案，含心跳分支，无网络请求
 gh workflow run "调度器健康检查" --repo fys2388/dragon-strategy-v4.3 -f always_report=true
 ```
 
-**仍未覆盖的盲区**：workflow 结论 `success` 不等于飞书真的收到（`v43_push.py` 里推送失败可能被吞掉）。
-现有监控只保证「调度发生了」，不保证「消息送达」。若要闭环，需要 Worker 侧加心跳
-（每次 dispatch 成功后写一个时间戳到 KV，健康检查再比对），但需要 Cloudflare 侧改动。
+⚠️ 心跳比对需要你手动完成两步（需要 Cloudflare 控制台权限，仓库里做不到）：
+```bash
+npx wrangler kv namespace create HEARTBEAT --config wrangler.toml   # 把打印的 UUID 填进 kv_namespaces.id
+npx wrangler deploy --config wrangler.toml
+# GitHub Settings → Secrets and variables → Actions → 新建
+#   WORKER_HEALTH_URL = https://<你的-worker-子域名>.workers.dev   （根 URL，不带 /health）
+```
+阈值 `MAX_HEARTBEAT_AGE_H` 默认 6.0 小时（可用同名环境变量覆盖）。本工作流约 19:30 BJT 执行，
+最后档位 15:30，6.0h 意味着「最后成功 dispatch 在 13:30 BJT 之后」就算新鲜；
+Worker 在 13:30 之前挂掉会被判为陈旧。想更早发现就调小。
 
 **6.3 未跟踪文件（21 项）— ✅ 已处理（2026-08-25）**
 
@@ -256,12 +326,16 @@ gh workflow run "Morning & Noon Report Push" --repo fys2388/dragon-strategy-v4.3
 gh workflow run "调度器健康检查" --repo fys2388/dragon-strategy-v4.3 -f always_report=true
 #    深度排查：Cloudflare 控制台 → Workers → macd-strategy-scheduler → Scheduled events
 #    （看是否还在按 */15 触发）；或浏览器访问 Worker URL 看是否返回 {"success":true,"status":204}
+#    配了 WORKER_HEALTH_URL 后，浏览器访问 <worker-url>/health 可看 Worker 最近一次
+#    dispatch 的时间戳与状态码（§6.2.2）。
 
 # 5. §6.3 的未跟踪文件已处理（2026-08-25），确认 git status 干净即可
 
 # 6. 读 AGENTS.md 全文 + 本文件 §6.0 / §6.2 / §6.4
-#    §6.0 测试套件（已修绿）、§6.2 调度器监控（已加）都已闭环。
-#    仍真正未决：§6.4 README 过期；§6.2 提到的「workflow success ≠ 飞书真的收到」盲区。
+#    §6.0 测试套件（92/0 全绿）、§6.2 调度器监控（已加，含飞书送达判定与 KV 心跳）、
+#    §6.4 README（已重写）都已闭环。
+#    仍真正未决：§6.2.2 的 Worker KV 心跳需你在 Cloudflare 控制台手动配两步；
+#    §6.5 Actions 配额；§6.6 knowledge 耦合。
 ```
 
 **验证交接成功的标准**：手动触发 premarket 与 scan 都能收到飞书；

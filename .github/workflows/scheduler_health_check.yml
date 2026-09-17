@@ -62,6 +62,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          # 可选：Cloudflare Worker 的 /health 端点根 URL（不带 /health）。
+          # 配了之后能区分「Worker 没跑」和「Worker 跑了但 GitHub 没接单」，
+          # 配置方式见 cloudflare-worker/wrangler.toml.example。没配则跳过心跳比对。
+          WORKER_HEALTH_URL: ${{ secrets.WORKER_HEALTH_URL }}
           ALWAYS_REPORT: ${{ inputs.always_report || 'false' }}
         run: |
           python scripts/scheduler_health_check.py --days "${{ inputs.days || '3' }}"

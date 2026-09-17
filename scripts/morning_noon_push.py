@@ -9,6 +9,9 @@
     python scripts/morning_noon_push.py --mode premarket
     python scripts/morning_noon_push.py --mode noon
     python scripts/morning_noon_push.py --no-send
+
+退出码：推送未被飞书接受时返回 1（让 GitHub Actions 工作流变红），
+        便于调度器健康检查按 failed_run 告警。见 docs/HANDOFF.md §6.2.1。
 """
 from __future__ import annotations
 
@@ -18,6 +21,8 @@ import sys
 from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# 同目录模块（feishu_client）
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # Windows 控制台默认 GBK，强制 UTF-8 输出避免 emoji 报错
 for _stream in (sys.stdout, sys.stderr):
@@ -33,6 +38,7 @@ from strategies.macd_resonance.market_gate import get_market_score  # noqa: E402
 from strategies.macd_resonance.portfolio_manager import PortfolioManager  # noqa: E402
 from strategies.macd_resonance.trading_calendar import now_bjt  # noqa: E402
 from utils.config_loader import load_feishu_config  # noqa: E402
+from feishu_client import check_feishu  # noqa: E402
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HISTORY_FILE = os.path.join(BASE_DIR, "data", "strategy_history.jsonl")
@@ -70,6 +76,12 @@ def get_webhook() -> str:
 
 
 def send_to_feishu(message: str) -> bool:
+    """推送飞书文本。返回是否真的被飞书接受。
+
+    注意：飞书自定义机器人在 webhook 被删除/停用时 HTTP 仍是 200，
+    只有正文 StatusCode 非 0 —— 所以必须走 check_feishu 校验，
+    不能只看 resp.status_code（否则假成功，见 docs/HANDOFF.md §6.2.1）。
+    """
     webhook = get_webhook()
     if not webhook:
         print("❌ 未配置 FEISHU_WEBHOOK_URL，跳过推送")
@@ -77,11 +89,15 @@ def send_to_feishu(message: str) -> bool:
     import requests
     try:
         resp = requests.post(webhook, json={"msg_type": "text", "content": {"text": message}}, timeout=10)
-        print(f"✅ 推送完成，HTTP {resp.status_code}")
-        return True
     except Exception as e:
-        print(f"❌ 推送失败: {e}")
+        print(f"❌ 推送失败: {type(e).__name__} {e}")
         return False
+    ok, reason = check_feishu(resp)
+    if ok:
+        print(f"✅ 推送完成（HTTP {resp.status_code}，已确认飞书接受）")
+    else:
+        print(f"❌ 飞书未接受推送: {reason}")
+    return ok
 
 
 def _market_section() -> list:
@@ -222,7 +238,11 @@ def main():
     print(report)
     print()
     if not no_send:
-        send_to_feishu(report)
+        if not send_to_feishu(report):
+            # 非零退出让 GitHub Actions 工作流变红 —— morning_noon_push.yml 是
+            # v43_push.py 盘前 9:45 守卫的补发通道，这条链静默失效同样危险。
+            print("❌ 报告未成功推送到飞书，以非零退出码结束")
+            sys.exit(1)
 
 
 if __name__ == "__main__":

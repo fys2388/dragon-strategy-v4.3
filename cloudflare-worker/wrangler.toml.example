@@ -10,10 +10,33 @@
 # 部署命令（需要 wrangler CLI + 有效的 wrangler.toml）：
 #   npx wrangler deploy --config wrangler.toml
 #
-# Worker 还需要在控制台配置两个 Secrets：
-#   GITHUB_TOKEN  —— GitHub PAT，需要 repo 权限（调度器触发 workflow_dispatch 用）
-# 以及一个 Scheduled event（Cron Triggers）：
-#   */15 * * * MON,TUE,WED,THU,FRI   (UTC，Worker 内部判断北京时间交易时段)
+# Worker 还需要在控制台配置：
+#   1) Secret：GITHUB_TOKEN —— GitHub PAT，需要 repo 权限（触发 workflow_dispatch 用）
+#   2) Scheduled event（Cron Triggers）：
+#        */15 * * * MON,TUE,WED,THU,FRI   (UTC，Worker 内部判断北京时间交易时段)
+#   3) KV namespace（可选但强烈建议）：见下方 [kv_namespaces]
+#
+# 心跳 KV 的用途：worker.js 在每次 dispatch 成功/失败后往 KV 写一条时间戳，
+# GET /health 端点返回它。GitHub Actions 的 scripts/scheduler_health_check.py 每天
+# 比对这份心跳与 GitHub 的运行记录，从而区分三种都表现为「runs == 0」的故障：
+#     heartbeat_stale   Worker 没跑（暂停/删除/Cron 触发器丢失）
+#     dispatch_no_run   Worker 说成功了，但 GitHub 没接单（配额耗尽/服务异常）
+#     dispatch_failed   dispatch 调用本身失败（401/403 = token 失效，404 = 工作流改名）
+# 不配 KV 也能正常推送，只是健康检查无法做这三种区分。
+#
+# 启用 KV 的步骤：
+#   npx wrangler kv namespace create HEARTBEAT --config wrangler.toml
+#     → 终端会打印一个 UUID，把它填到下方 kv_namespaces.id
+#   然后 npx wrangler deploy --config wrangler.toml
+#
+# 最后在 GitHub 仓库 Settings → Secrets 加一个：
+#   WORKER_HEALTH_URL = https://<你的-worker-子域名>.workers.dev
+#   （填 Worker 的根 URL，不带 /health；健康检查脚本会自动补上）
+
+# 心跳 KV（先跑 wrangler kv namespace create 拿到 id 再填）
+kv_namespaces = [
+  { binding = "HEARTBEAT", id = "<你的 KV Namespace UUID>" }
+]
 
 name = "macd-strategy-scheduler"
 main = "worker.js"

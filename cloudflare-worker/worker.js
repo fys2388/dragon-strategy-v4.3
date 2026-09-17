@@ -6,8 +6,16 @@
 // 环境变量（Worker Settings → Variables）：
 //   GITHUB_TOKEN = 你的 GitHub Personal Access Token（需要 repo 权限）
 //
+// KV 绑定（Worker Settings → Storage → KV namespaces，可选但强烈建议）：
+//   HEARTBEAT = 心跳 namespace，用于让 GitHub Actions 侧的调度器健康检查能区分
+//   「Worker 没跑」和「Worker 跑了但 GitHub 没接单」两种都表现为 runs==0 的故障。
+//   未配置时 Worker 照常推送，只是 /health 返回的空心跳无法参与比对。
+//
 // Cron Triggers（只需配置一个，UTC 时间）：
 //   */15 * * * MON,TUE,WED,THU,FRI  → 每15分钟触发，Worker内部判断交易时段
+//
+// 诊断端点（浏览器或 Actions 健康检查访问）：
+//   GET https://<worker-url>/health  → 最近一次成功/失败的 dispatch 记录
 
 const GITHUB_REPO = "fys2388/dragon-strategy-v4.3";
 const WORKFLOW_FILE = "strategy_cloud_deploy.yml";
@@ -40,6 +48,12 @@ export default {
     // 东财API代理路由（解决GitHub Actions IP被限制问题）
     if (path.startsWith("/proxy/")) {
       return await proxyEastmoney(url);
+    }
+
+    // 心跳端点：GitHub Actions 的 scheduler_health_check 每天比对这里，
+    // 用它区分 Worker 停摆 / GitHub 未接单 / dispatch 调用失败三种故障。
+    if (path === "/health") {
+      return await healthEndpoint(env);
     }
 
     // 手动测试入口：浏览器访问 Worker URL 即可触发一次 scan
@@ -183,14 +197,84 @@ async function triggerWorkflow(env, workflowFile, reportMode) {
 
     if (resp.status === 204) {
       console.log(`[成功] 已触发 ${workflowFile} (report_mode=${reportMode || "N/A"})`);
+      await recordHeartbeat(env, "last_dispatch", {
+        ts_ms: Date.now(),
+        workflow: workflowFile,
+        report_mode: reportMode || null,
+        ok: true,
+      });
       return { success: true, status: 204 };
     } else {
       const text = await resp.text();
       console.error(`[失败] HTTP ${resp.status}: ${text}`);
+      await recordHeartbeat(env, "last_failure", {
+        ts_ms: Date.now(),
+        workflow: workflowFile,
+        report_mode: reportMode || null,
+        ok: false,
+        status: resp.status,
+        error: text.slice(0, 200),
+      });
       return { success: false, status: resp.status, error: text };
     }
   } catch (e) {
     console.error(`[异常] ${e.message}`);
+    await recordHeartbeat(env, "last_failure", {
+      ts_ms: Date.now(),
+      workflow: workflowFile,
+      report_mode: reportMode || null,
+      ok: false,
+      status: null,
+      error: String(e.message).slice(0, 200),
+    });
     return { success: false, error: e.message };
   }
+}
+
+// 写心跳到 KV。只观测、不参与主流程：写失败仅记日志，
+// 绝不让「KV 写不进」导致当天交易推送丢失。
+async function recordHeartbeat(env, key, value) {
+  const heartbeat = env.HEARTBEAT;
+  if (!heartbeat) {
+    // 静默跳过：每个档位都会调到这里，不打日志避免刷屏。
+    // 「KV 未配置」这个状态由 GET /health 的 kvConfigured=false 暴露。
+    return;
+  }
+  try {
+    await heartbeat.put(key, JSON.stringify(value));
+  } catch (e) {
+    console.warn(`[心跳] 写入失败（忽略）: ${e.message}`);
+  }
+}
+
+// GET /health —— 返回心跳，供 scheduler_health_check.py 比对。
+// KV 未配置时返回 kvConfigured=false + 空记录，端点本身仍正常响应，
+// 这样「还没升级 KV」和「Worker 挂了」能被区分开。
+async function healthEndpoint(env) {
+  const heartbeat = env.HEARTBEAT;
+  const readKey = async (key) => {
+    if (!heartbeat) return null;
+    try {
+      const raw = await heartbeat.get(key);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      console.warn(`[心跳] 读取 ${key} 失败: ${e.message}`);
+      return null;
+    }
+  };
+  const [lastDispatch, lastFailure] = await Promise.all([
+    readKey("last_dispatch"),
+    readKey("last_failure"),
+  ]);
+  const body = {
+    ok: true,
+    repo: GITHUB_REPO,
+    checkedAtUtc: new Date().toISOString(),
+    kvConfigured: Boolean(heartbeat),
+    last_dispatch: lastDispatch,
+    last_failure: lastFailure,
+  };
+  return new Response(JSON.stringify(body), {
+    headers: { "Content-Type": "application/json; charset=utf-8" },
+  });
 }

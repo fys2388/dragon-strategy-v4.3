@@ -18,6 +18,11 @@ from datetime import datetime
 
 # 允许直接运行脚本时导入 strategies 包
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# 同目录模块（feishu_client）。用绝对路径显式加入，
+# 无论本文件是被 `python scripts/v43_push.py` 直接运行还是被 import 都能找到。
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from feishu_client import check_feishu  # noqa: E402
 
 from strategies.macd_resonance.scanner import Scanner, build_message  # noqa: E402
 from strategies.macd_resonance.oversold_rebound import OversoldReboundScanner, build_oversold_message  # noqa: E402
@@ -36,13 +41,37 @@ SCAN_TIMEOUT_S = 480  # 扫描硬超时（秒）：数据源异常挂起时兜�
 SCAN_MAX_STOCKS = 1200  # 定时扫描标的池规模（按成交额降序，活跃标的；控制 5 分钟节奏内的耗时）
 
 
-def send_feishu_alert(text: str, title: str = "策略告警"):
-    """推送飞书告警（复用扫描器的 webhook 逻辑）。"""
+def send_feishu_alert(text: str, title: str = "策略告警") -> bool:
+    """推送飞书告警。返回是否真的被飞书接受。"""
     webhook = os.environ.get("FEISHU_WEBHOOK_URL", "")
     if not webhook:
-        return
+        print("⚠️ 未配置 FEISHU_WEBHOOK_URL，告警未发送")
+        return False
     import requests
-    requests.post(webhook, json={"msg_type": "text", "content": {"text": f"【{title}】{text}"}}, timeout=8)
+    try:
+        resp = requests.post(webhook, json={"msg_type": "text", "content": {"text": f"【{title}】{text}"}},
+                             timeout=8)
+    except Exception as e:  # noqa: BLE001
+        print(f"❌ 飞书告警失败: {type(e).__name__} {e}")
+        return False
+    ok, reason = check_feishu(resp)
+    if not ok:
+        print(f"❌ 飞书未接受告警: {reason}")
+    return ok
+
+
+def _exit_on_push_failure(ok: bool, what: str) -> None:
+    """推送未成功时以非零退出码结束，让 GitHub Actions 工作流变红。
+
+    背景：此前 _send_text 的返回值被完全忽略，webhook 失效时 workflow 仍显示 success，
+    调度器健康检查只数 workflow_dispatch 运行次数也看不出来 —— 用户可能连着几天
+    一条推送都没收到，却没有任何告警。这是 docs/HANDOFF.md §6.2 记录的盲区。
+    现在：推送失败 → 非零退出 → Actions 红点 + 健康检查的 failed_run 告警，双通道兜底。
+    """
+    if ok:
+        return
+    print(f"❌ {what}未成功推送到飞书，以非零退出码结束（让 Actions 变红作为告警兜底）")
+    sys.exit(1)
 
 
 def should_run(now: datetime) -> bool:
@@ -56,7 +85,7 @@ def should_run(now: datetime) -> bool:
 
 
 def _send_text(msg: str) -> bool:
-    """推送纯文本到飞书。"""
+    """推送纯文本到飞书。返回是否真的被飞书接受（HTTP 200 且飞书状态码为 0）。"""
     webhook = os.environ.get("FEISHU_WEBHOOK_URL", "")
     if not webhook:
         print("⚠️ 未配置 FEISHU_WEBHOOK_URL，跳过推送")
@@ -64,11 +93,15 @@ def _send_text(msg: str) -> bool:
     import requests
     try:
         resp = requests.post(webhook, json={"msg_type": "text", "content": {"text": msg}}, timeout=8)
-        print(f"✅ 飞书推送完成，HTTP {resp.status_code}")
-        return True
-    except Exception as e:
-        print(f"❌ 飞书推送失败: {e}")
+    except Exception as e:  # noqa: BLE001
+        print(f"❌ 飞书推送失败: {type(e).__name__} {e}")
         return False
+    ok, reason = check_feishu(resp)
+    if ok:
+        print(f"✅ 飞书推送完成（HTTP {resp.status_code}，已确认飞书接受）")
+    else:
+        print(f"❌ 飞书未接受推送: {reason}")
+    return ok
 
 
 def ai_filter_entries(entries: list, strategy_type: str = "") -> list:
@@ -139,14 +172,14 @@ def get_market_cluster_info() -> dict:
         return {}
 
 
-def push_premarket_report() -> None:
+def push_premarket_report() -> bool:
     """盘前报告：复用 morning_noon_push 的生成逻辑（大盘概况+昨日推荐+持仓提醒）。"""
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # scripts/ 目录
     from morning_noon_push import build_premarket_report  # noqa: E402
     msg = build_premarket_report()
     print(msg)
     print()
-    _send_text(msg)
+    return _send_text(msg)
 
 
 def resolve_report_mode(now: datetime) -> str:
@@ -194,7 +227,7 @@ def main():
         print(f"📌 非交易时段 {now.strftime('%Y-%m-%d %H:%M')}，退出")
         return
     if report_mode == "premarket":
-        push_premarket_report()
+        _exit_on_push_failure(push_premarket_report(), "盘前报告")
         return
 
     # 健康度监控：检查连续0推荐，自动降级
@@ -365,7 +398,7 @@ def main():
 
     # 合并所有策略消息为一条推送
     combined_msg = cluster_header + sector_report + "\n\n".join(all_messages)
-    _send_text(combined_msg)
+    push_ok = _send_text(combined_msg)
     print(f"\n📨 合并推送完成，共{len(all_messages)}个策略模块，市场状态={cluster_info.get('cluster_name_cn', '未知')}")
 
     # 打印健康度报告
@@ -382,6 +415,10 @@ def main():
             print(f"[跟踪] 总计{stats['total']}只，更新{stats['updated']}只，完成{stats['completed']}只")
     except Exception as e:
         print(f"⚠️ 绩效跟踪更新失败: {e}")
+
+    # 推送失败必须以非零退出码结束 —— 见 _exit_on_push_failure 的注释。
+    # 刻意放在最后：绩效跟踪更新是当天唯一一次，不因推送失败而跳过。
+    _exit_on_push_failure(push_ok, "盘中扫描报告")
 
 
 if __name__ == "__main__":

@@ -17,10 +17,22 @@ cron 延迟容忍（实测）：
     都已结束，不会误报；且脚本只评估「已完整结束」的交易日，
     即使延迟更久（甚至跨到次日）结论依然成立。
 
-判定口径：数 workflow_dispatch 运行次数，不判「是否真的推送到飞书」。
+判定口径：数 workflow_dispatch 运行次数，外加 Worker 心跳比对。
     - 数运行次数对节假日免疫：Worker 不检查 A 股休市日历，节假日照样触发。
     - 数运行次数对检查自身延迟免疫：只看历史日。
-    - 已知盲区：工作流运行 success 不等于飞书确实收到（推送失败被吞掉时检测不到）。
+
+Worker 心跳比对（需配置 WORKER_HEALTH_URL，可选）：
+    worker.js 在每次 dispatch 成功/失败后往 Cloudflare KV 写一条时间戳，
+    /health 端点返回。这让下面三种「都表现为 runs==0」的情况第一次能被区分开：
+        heartbeat_stale    Worker 没跑（暂停/删除/Cron 触发器丢失）
+        dispatch_no_run    Worker 说成功了，但 GitHub 没接单（配额耗尽/服务异常）
+        dispatch_failed    dispatch 调用本身失败（401/403 = GITHUB_TOKEN 失效，404 = 工作流改名）
+    未配置 WORKER_HEALTH_URL 时跳过这一段，不影响原有的运行次数判定。
+
+飞书送达判定（已封堵的盲区）：
+    本脚本自身和 scripts/v43_push.py 都校验飞书正文的 StatusCode/code，
+    不再只看 HTTP 200；推送未被飞书接受时 v43_push.py 以非零退出码结束，
+    工作流变红 → 会被下面的 failed_run 分支抓到。
 
 用法：
     python scripts/scheduler_health_check.py                  # 正常：仅异常时推送
@@ -32,6 +44,8 @@ cron 延迟容忍（实测）：
     GH_REPO             仓库 full_name，默认 fys2388/dragon-strategy-v4.3
     GITHUB_TOKEN        具备 actions: read 的 token（Actions 内置）
     FEISHU_WEBHOOK_URL  告警通道
+    WORKER_HEALTH_URL   Cloudflare Worker 的 /health 端点完整 URL（可选，启用心跳比对）
+    MAX_HEARTBEAT_AGE_H 心跳陈旧阈值（小时），默认 6.0
     ALWAYS_REPORT       "true" 时正常情况也推送
 """
 from __future__ import annotations
@@ -65,6 +79,11 @@ CHECK_DAYS = 3                # 回看最近 N 个完整交易日
 API_BASE = "https://api.github.com"
 API_VERSION = "2022-11-28"
 USER_AGENT = "macd-scheduler-health-check"
+
+# 心跳陈旧阈值。本工作流 cron 定 15:00 BJT，实测延迟 ~4.5h → 约 19:30 BJT 执行，
+# 当日最后一个档位是 15:30 复盘。6.0h 意味着「最后成功 dispatch 在 13:30 BJT 之后」
+# 就算新鲜；Worker 在 13:30 之前挂掉会被判为陈旧。想更严格就调小这个值。
+MAX_HEARTBEAT_AGE_H = float(os.environ.get("MAX_HEARTBEAT_AGE_H", "6.0"))
 
 _WEEKDAY_CN = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
 
@@ -216,6 +235,92 @@ def evaluate(token: str, days: List[date]) -> Tuple[List[Dict], List[Tuple[str, 
 
 
 # ------------------------------------------------------------
+# Worker 心跳（可选，需 WORKER_HEALTH_URL）
+# ------------------------------------------------------------
+def fetch_worker_heartbeat(url: str, retries: int = 2) -> Optional[Dict]:
+    """GET Cloudflare Worker 的 /health 端点。
+
+    返回 None 表示端点不可达（网络/域名/Worker 下线），由调用方判为异常；
+    返回 dict 即 worker.js 的 /health 响应体。
+    """
+    import requests
+    base = url.rstrip("/")
+    if not base.endswith("/health"):
+        base += "/health"
+    last_err = ""
+    for attempt in range(retries):
+        try:
+            resp = requests.get(base, timeout=15, headers={"User-Agent": USER_AGENT})
+            if resp.status_code == 200:
+                return resp.json()
+            last_err = f"HTTP {resp.status_code}: {resp.text[:120]}"
+        except Exception as e:
+            last_err = f"{type(e).__name__} {e}"
+        if attempt < retries - 1:
+            time.sleep(2 ** attempt)
+    print(f"  ⚠️ Worker 心跳端点不可达: {base} -> {last_err}")
+    return None
+
+
+def heartbeat_problems(hb: Dict, per_day: List[Dict]) -> List[Tuple[str, str, str]]:
+    """比对 Worker 心跳与 GitHub 运行记录，产出可区分的告警。
+
+    hb 为 /health 响应体。时间戳统一按 UTC 毫秒比较（Date.now() 就是 UTC 毫秒）。
+    """
+    problems: List[Tuple[str, str, str]] = []
+    last_dispatch = hb.get("last_dispatch") or {}
+    last_failure = hb.get("last_failure") or {}
+    now_ms = time.time() * 1000
+
+    def age_hours(item: Dict) -> Optional[float]:
+        ts = item.get("ts_ms")
+        if not ts:
+            return None
+        try:
+            return (now_ms - float(ts)) / 3.6e6
+        except (TypeError, ValueError):
+            return None
+
+    def beijing_time(item: Dict) -> str:
+        ts = item.get("ts_ms")
+        if not ts:
+            return "未知时间"
+        try:
+            return datetime.fromtimestamp(float(ts) / 1000,
+                                          timezone(timedelta(hours=8))).strftime("%m-%d %H:%M")
+        except (TypeError, ValueError):
+            return "未知时间"
+
+    # 1) dispatch 调用本身失败 —— 心跳里带了 HTTP 状态码，能直接定位原因
+    fail_age = age_hours(last_failure)
+    if fail_age is not None and fail_age <= MAX_HEARTBEAT_AGE_H:
+        status = last_failure.get("status") or "网络异常"
+        hint = ("401/403 → Cloudflare Secrets.GITHUB_TOKEN 失效或不含 repo 权限；"
+                "404 → 工作流文件被改名/删除" if str(status).isdigit() else "")
+        problems.append(("🚨", "dispatch_failed",
+                         f"Worker 最近一次 dispatch 失败（{beijing_time(last_failure)}，"
+                         f"HTTP {status}，{fail_age:.1f} 小时前）{hint}"))
+
+    # 2) 没有任何近期成功记录 → Worker 本身没在跑
+    dispatch_age = age_hours(last_dispatch)
+    if dispatch_age is None or dispatch_age > MAX_HEARTBEAT_AGE_H:
+        problems.append(("🚨", "heartbeat_stale",
+                         f"Worker 最近 {MAX_HEARTBEAT_AGE_H:.1f} 小时内没有成功的 dispatch 记录"
+                         f"（最后成功：{beijing_time(last_dispatch)}）→ "
+                         f"Worker 未运行/被暂停/被删除，或 Cron 触发器丢失"))
+    else:
+        # 3) 心跳新鲜但 GitHub 侧一次都没跑 → 问题在 GitHub，不在 Worker
+        total_push = sum(r.get("push", 0) for r in per_day if not r.get("push_error"))
+        if total_push == 0:
+            problems.append(("🚨", "dispatch_no_run",
+                             f"Worker 在 {beijing_time(last_dispatch)} 成功 dispatch，"
+                             f"但最近 {len(per_day)} 个交易日 GitHub 侧 0 次运行记录 → "
+                             f"GitHub 未接单（Actions 配额耗尽或服务异常），Worker 本身是好的"))
+
+    return problems
+
+
+# ------------------------------------------------------------
 # 文案
 # ------------------------------------------------------------
 def build_report(now: datetime, per_day: List[Dict],
@@ -273,23 +378,41 @@ def build_report(now: datetime, per_day: List[Dict],
         lines.append("")
         lines.append("🔧 排查路径：")
         kinds = {p[1] for p in problems}
+        # 每条诊断一组提示行；先收集再统一编号，避免多分支各自从 1 开始重复编号。
+        groups: List[Tuple[str, List[str]]] = []
+        if "heartbeat_unreachable" in kinds:
+            groups.append(("Worker 心跳端点不可达", [
+                "确认 Worker 没被删除，且 GitHub Secret WORKER_HEALTH_URL 填的是 Worker 根 URL。"]))
+        if "dispatch_failed" in kinds:
+            groups.append(("Cloudflare 控制台 → Workers → macd-strategy-scheduler →", [
+                "Settings → Secrets and variables，检查 GITHUB_TOKEN 是否失效或权限不足。",
+                "HTTP 404 则是工作流文件被改名/删除，对照 worker.js 的 WORKFLOW_FILE 常量。"]))
+        if "dispatch_no_run" in kinds:
+            groups.append(("问题在 GitHub 侧，不是 Worker：", [
+                "检查本月 Actions 分钟数配额是否耗尽（Settings → Actions → Usage），",
+                "或 GitHub 状态页是否有故障。Worker 不需要动。"]))
+        if "heartbeat_stale" in kinds:
+            groups.append(("Cloudflare 控制台 → Workers → macd-strategy-scheduler，", [
+                "确认 Worker 没被暂停/删除，且 Scheduled events 里 */15 的 cron 还在。"]))
         if "silent" in kinds or "missing_workflow" in kinds:
-            lines.append("   1. Cloudflare 控制台 → Workers → macd-strategy-scheduler → Scheduled events，")
-            lines.append("      看最近是否还在按 */15 触发（Worker 停摆 = 这里没有事件）")
-            lines.append("   2. 同一页面 → Settings → Secrets and variables，确认 GITHUB_TOKEN 有效且含 repo 权限。")
-            lines.append("      token 失效时 Worker 调 dispatch 返回 401/403，GitHub 端不产生任何运行记录。")
-            lines.append("   3. 确认链路正常后要补发当日推送：")
-            lines.append(f"      gh workflow run \"V1.0 MACD多周期共振策略云推送\" "
-                         f"--repo {REPO} -f report_mode=scan")
+            groups.append(("Cloudflare 控制台 → Workers → macd-strategy-scheduler → Scheduled events，", [
+                "看最近是否还在按 */15 触发（Worker 停摆 = 这里没有事件）；",
+                "同一页面 Settings → Secrets and variables，确认 GITHUB_TOKEN 有效且含 repo 权限 ——",
+                "token 失效时 Worker 调 dispatch 返回 401/403，GitHub 端不产生任何运行记录。"]))
+            groups.append(("确认链路正常后要补发当日推送：", [
+                f"gh workflow run \"V1.0 MACD多周期共振策略云推送\" --repo {REPO} -f report_mode=scan"]))
         if "partial" in kinds:
-            lines.append("   - 对照 cloudflare-worker/worker.js 的 SCHEDULE 数组与实际触发时间；")
-            lines.append("     常见原因是 GitHub Actions 配额耗尽导致部分档位触发失败。")
+            groups.append(("对照 cloudflare-worker/worker.js 的 SCHEDULE 数组与实际触发时间；", [
+                "常见原因是 GitHub Actions 配额耗尽导致部分档位触发失败。"]))
         if "failed_run" in kinds:
-            lines.append("   - 打开上面 run id 的日志，看 scripts/v43_push.py 的推送步骤是否报错。")
-            lines.append("     注意 workflow 结论 success 不代表飞书一定收到（推送失败可能被吞掉）。")
+            groups.append(("打开上面 run id 的日志，看 scripts/v43_push.py 的推送步骤是否报错。", [
+                "v43_push.py 已改为推送未被飞书接受时非零退出，所以红点基本等价于推送失败。"]))
         if "api_error" in kinds:
-            lines.append("   - 本工作流已配 permissions: actions: read；持续失败请检查")
-            lines.append("     GitHub API 限流或 Actions 内置 token 状态。")
+            groups.append(("本工作流已配 permissions: actions: read；持续失败请检查", [
+                "GitHub API 限流或 Actions 内置 token 状态。"]))
+        for idx, (top, rest) in enumerate(groups, start=1):
+            lines.append(f"   {idx}. {top}")
+            lines.extend(f"      {s}" for s in rest)
 
     return healthy, "\n".join(lines)
 
@@ -297,8 +420,32 @@ def build_report(now: datetime, per_day: List[Dict],
 # ------------------------------------------------------------
 # 推送
 # ------------------------------------------------------------
+def _feishu_result(resp) -> Tuple[bool, str]:
+    """校验飞书响应是否真的成功，返回 (是否成功, 失败原因)。
+
+    飞书自定义机器人成功返回 HTTP 200 + 正文 {"StatusCode": 0}（v2）或 {"code": 0}（v1）。
+    webhook 被删除/停用时 HTTP 往往仍是 200，只有正文状态码非 0 —— 只看 HTTP 状态码
+    会把「告警没送达」误判成「已送达」，于是本脚本以为发出去了、直接 exit 0。
+    本脚本是监控本身，这条链断了就等于静默失效，所以必须校验。
+    （与 scripts/v43_push.py 的同名函数逻辑一致；此处刻意复制，
+    避免本脚本依赖 strategies/ 的重型依赖。）
+    """
+    if getattr(resp, "status_code", 0) != 200:
+        return False, f"HTTP {resp.status_code}: {(getattr(resp, 'text', '') or '')[:120]}"
+    try:
+        data = resp.json()
+    except Exception:
+        return True, ""
+    if not isinstance(data, dict):
+        return True, ""
+    code = data.get("StatusCode", data.get("code"))
+    if code in (None, 0):
+        return True, ""
+    return False, f"飞书拒绝 StatusCode={code} msg={data.get('msg', '')}"
+
+
 def push_feishu(text: str) -> bool:
-    """推送纯文本。未配置 webhook 时打印并返回 False（与 scripts/daily_position_monitor.py 一致）。"""
+    """推送纯文本。返回是否真的被飞书接受。未配置 webhook 时打印并返回 False。"""
     webhook = os.environ.get("FEISHU_WEBHOOK_URL", "")
     if not webhook:
         print("⚠️ 未配置 FEISHU_WEBHOOK_URL，告警无法送达（仅打印）")
@@ -306,11 +453,15 @@ def push_feishu(text: str) -> bool:
     import requests
     try:
         resp = requests.post(webhook, json={"msg_type": "text", "content": {"text": text}}, timeout=8)
-        print(f"{'✅' if resp.status_code == 200 else '❌'} 飞书推送 HTTP {resp.status_code}")
-        return resp.status_code == 200
     except Exception as e:
         print(f"❌ 飞书推送失败: {type(e).__name__} {e}")
         return False
+    ok, reason = _feishu_result(resp)
+    if ok:
+        print(f"✅ 飞书推送 HTTP {resp.status_code}，已确认飞书接受")
+    else:
+        print(f"❌ 飞书未接受推送: {reason}")
+    return ok
 
 
 def selftest_report() -> str:
@@ -331,6 +482,17 @@ def selftest_report() -> str:
         ("🚨", "silent", f"{day_label(y)} 全天 0 次 收盘复盘调度 → "
                          f"Cloudflare Worker 未运行，或其 Secrets.GITHUB_TOKEN 已失效"),
     ]
+    # 心跳分支：用合成的「陈旧心跳 + 1 小时前的 401 失败」走一遍真实判定逻辑，
+    # 这样核对格式时检查的是真实代码路径，而不是手写字符串。
+    now_ts = now_bjt().timestamp()
+    stale_hb = {
+        "kvConfigured": True,
+        "last_dispatch": {"ts_ms": (now_ts - 20 * 3600) * 1000,
+                          "workflow": PUSH_WORKFLOW, "report_mode": "scan"},
+        "last_failure": {"ts_ms": (now_ts - 1 * 3600) * 1000,
+                         "workflow": PUSH_WORKFLOW, "status": 401},
+    }
+    problems.extend(heartbeat_problems(stale_hb, per_day))
     _, text = build_report(now_bjt(), per_day, problems, [])
     return text
 
@@ -371,6 +533,25 @@ def main() -> int:
     print("   检查日：" + "、".join(day_label(d) for d in days))
 
     per_day, problems, api_errors = evaluate(token, days)
+
+    # Worker 心跳比对（可选升级项）：未配置 WORKER_HEALTH_URL 时跳过，
+    # 不影响上面已经能用的「数运行次数」判定。
+    hb_url = os.environ.get("WORKER_HEALTH_URL", "").strip()
+    if hb_url:
+        hb = fetch_worker_heartbeat(hb_url)
+        if hb is None:
+            problems.append(("🚨", "heartbeat_unreachable",
+                             f"Worker 心跳端点 {hb_url.rstrip('/')}/health 不可达 → "
+                             f"Worker 已下线/被删除，或 WORKER_HEALTH_URL 配置错误"))
+        else:
+            kv = "已配置" if hb.get("kvConfigured") else "未配置 KV 绑定"
+            print(f"   心跳：Worker 在线（KV {kv}），最后成功 dispatch="
+                  f"{(hb.get('last_dispatch') or {}).get('ts_ms') or '无'}")
+            problems.extend(heartbeat_problems(hb, per_day))
+    else:
+        print("   ⚠️ 未配置 WORKER_HEALTH_URL，跳过 Worker 心跳比对"
+              "（仍按 workflow_dispatch 次数判定，无法区分 Worker 停摆与 GitHub 未接单）")
+
     healthy, text = build_report(now, per_day, problems, api_errors)
     print(text)
 

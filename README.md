@@ -99,6 +99,9 @@ scripts/v43_push.py  ──►  飞书 webhook（GitHub Secret FEISHU_WEBHOOK_UR
 - **Worker 是唯一自动触发源，挂了会静默停推**，已有监控兜底：
   `scheduler_health_check.yml` 每天 15:00 BJT 检查最近 3 个完整交易日，
   停推会推飞书 🚨 并让该工作流变红。
+  推送环节本身也会让工作流变红：`v43_push.py` 会校验飞书正文的状态码，
+  **webhook 失效 / 消息被拒时以非零退出码结束**（只看 HTTP 200 是假成功），
+  健康检查随后按 `failed_run` 告警。
 - **本地不做定时推送。** `python scripts/v43_push.py` 可手动跑一次用于验证链路，
   但本机有代理问题、AkShare 会 `ProxyError`，**不要用本地扫描评估性能**（真实性能看云端日志）。
 
