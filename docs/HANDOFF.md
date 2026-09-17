@@ -152,9 +152,37 @@ python -m pytest tests -q          # 应为 92 passed，耗时 ~1.6s
 窗口外补发盘前报告请走 `morning_noon_push.yml`（`workflow_dispatch`，不经守卫）。
 可选加固：在 Worker 侧 `handleTrigger` 里也判断一次时间（修复 B），双保险。
 
-**6.2 调度器无监控（单点静默失败）**
-Cloudflare Worker 挂掉、或其 `GITHUB_TOKEN` 过期 → **完全停推，且没有任何告警**。
-建议在 `evening_review.yml` 或周度工作流里加一个「今日是否收到盘中推送」的检查，缺失则发飞书告警。
+**6.2 调度器无监控（单点静默失败）— ✅ 已加监控（2026-09-17）**
+Cloudflare Worker 挂掉、或其 `GITHUB_TOKEN` 过期 → **完全停推**。原方案没有任何告警，现已补齐。
+
+新增 `.github/workflows/scheduler_health_check.yml` + `scripts/scheduler_health_check.py`：
+
+| 设计点 | 选择 | 理由（都是实测出来的） |
+|---|---|---|
+| 触发源 | GitHub `schedule`（**必须**） | `evening_review.yml` 等推送工作流本身也是 Worker 触发的，用它们监控 Worker = 用停摆的系统监控停摆的系统。`schedule` 是本仓库唯一不依赖 Worker 的自动触发源 |
+| cron 时间 | `0 7 * * 1-5`（15:00 BJT） | 本仓库 `schedule` 实测延迟 **4h23m / 4h32m**（`daily_position_monitor.yml` 定 06:00 UTC，连续两日 10:23 / 10:32 UTC 才执行）。15:00 BJT 定、约 19:30 BJT 执行，此时当日最后档位 15:30 已过去，不会把「还没到点」误判成停推 |
+| 判定口径 | 数 `workflow_dispatch` 运行次数 | 对节假日免疫（Worker 不检查 A 股休市日历，节假日照样触发）；对检查自身延迟免疫（只看已结束的交易日） |
+| 期望值 | 盘中 10 次/天 + 复盘 1 次/天 | 与 `cloudflare-worker/worker.js` 的 `SCHEDULE` 一一对应。**改节奏时必须同步改** `EXPECTED_PUSH_PER_DAY` / `EXPECTED_REVIEW_PER_DAY` |
+| 回看窗口 | 最近 3 个**完整**交易日（不含当天，自动跳周末） | 只要检查被延迟到次日，结论依然成立 |
+| 推送策略 | 正常时**静默**，异常才推飞书 + 工作流变红 | 每天一条「正常」是噪音；变红是兜底信号（飞书万一也挂了） |
+
+告警分三档标题，避免误报浪费排查时间：
+- `✅ 正常` —— 不推送
+- `🚨 检测到停推风险` —— 某交易日 0 次调度（Worker 停摆 / token 失效）、工作流文件被删（404）、部分档位缺失、有 run 非 success
+- `⚠️ 本次未能完整判定（检查自身问题，非停推）` —— GitHub API 调用失败。**这一档是刻意加的**：
+  首版把 API 失败当成 0 次，会半夜误报「Worker 停摆」让人去 Cloudflare 控制台白查一轮。
+  现在 API 失败的日期不参与判定、表里显示 `❓API失败`。
+
+手动验证：
+```bash
+python scripts/scheduler_health_check.py --dry-run        # 只打印不推送（本地需 GITHUB_TOKEN）
+python scripts/scheduler_health_check.py --selftest       # 打印模拟告警文案，无网络请求
+gh workflow run "调度器健康检查" --repo fys2388/dragon-strategy-v4.3 -f always_report=true
+```
+
+**仍未覆盖的盲区**：workflow 结论 `success` 不等于飞书真的收到（`v43_push.py` 里推送失败可能被吞掉）。
+现有监控只保证「调度发生了」，不保证「消息送达」。若要闭环，需要 Worker 侧加心跳
+（每次 dispatch 成功后写一个时间戳到 KV，健康检查再比对），但需要 Cloudflare 侧改动。
 
 **6.3 未跟踪文件（21 项）— ✅ 已处理（2026-08-25）**
 
@@ -172,7 +200,8 @@ Cloudflare Worker 挂掉、或其 `GITHUB_TOKEN` 过期 → **完全停推，且
 
 **6.4 `README.md` 已过期**
 README 仍写「`strategy-push.yml` / `strategy_cloud_deploy.yml` 自动运行」「每 5 分钟」「unittest 16 项」。
-实际是：外部调度器触发、每 30 分钟、pytest 82 项。建议把 README 的「部署」章节改为指向 `AGENTS.md`。
+实际是：外部调度器（Cloudflare Worker）触发、每 30 分钟、pytest 92 项，另有调度器健康检查监控。
+建议把 README 的「部署」章节改为指向 `AGENTS.md`（权威来源），不要在 README 里重复维护这些数字。
 
 **6.5 GitHub Actions 配额**
 节奏已是每 30 分钟。若再加密，需先评估免费配额（提交 `63df125` 的动机）。
@@ -203,14 +232,18 @@ gh workflow run "Morning & Noon Report Push" --repo fys2388/dragon-strategy-v4.3
 #    观察飞书是否收到「🌅 盘前报告」；运行日志应有 REPORT_MODE / TRIGGER 字段。
 
 # 4. 确认调度器还在跑（否则一切自动推送都会停）
-#    - Cloudflare 控制台 → Workers → macd-strategy-scheduler → Scheduled events 日志
-#    - 或浏览器访问 Worker URL 看是否返回 {"success":true,"status":204}
-#    - 或检查 GitHub Actions 里近几小时是否有 workflow_dispatch 来源的运行
+#    最快：gh run list --limit 20 看今天有没有 workflow_dispatch 来源的运行
+#    已有自动监控（§6.2）：scheduler_health_check.yml 每天 15:00 BJT 检查最近 3 个交易日，
+#    停推会推飞书 🚨 并让该工作流变红。想立刻手动验一次：
+gh workflow run "调度器健康检查" --repo fys2388/dragon-strategy-v4.3 -f always_report=true
+#    深度排查：Cloudflare 控制台 → Workers → macd-strategy-scheduler → Scheduled events
+#    （看是否还在按 */15 触发）；或浏览器访问 Worker URL 看是否返回 {"success":true,"status":204}
 
 # 5. §6.3 的未跟踪文件已处理（2026-08-25），确认 git status 干净即可
 
-# 6. 读 AGENTS.md 全文 + 本文件 §6.0 / §6.2：
-#    「测试套件是红的」与「调度器是单点」是接手后最该先处理的两件事
+# 6. 读 AGENTS.md 全文 + 本文件 §6.0 / §6.2 / §6.4
+#    §6.0 测试套件（已修绿）、§6.2 调度器监控（已加）都已闭环。
+#    仍真正未决：§6.4 README 过期；§6.2 提到的「workflow success ≠ 飞书真的收到」盲区。
 ```
 
 **验证交接成功的标准**：手动触发 premarket 与 scan 都能收到飞书；

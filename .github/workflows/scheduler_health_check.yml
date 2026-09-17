@@ -1,0 +1,67 @@
+# -*- coding: utf-8 -*-
+# 调度器健康检查：检测 Cloudflare Worker / GITHUB_TOKEN 静默失效。
+# 对应 docs/HANDOFF.md §6.2（原「P0 未加监控」项）。
+#
+# 为什么这个工作流必须带 schedule：
+#   所有交易时段推送都由 Cloudflare Worker 调 workflow_dispatch 触发，Worker 是唯一
+#   自动触发源。Worker 停摆或其 Secrets.GITHUB_TOKEN 过期 = 完全停推，而仓库里
+#   原本没有任何东西会告警 —— 因为其它推送工作流本身也依赖 Worker。
+#   GitHub schedule 是本仓库唯一不依赖 Worker 的自动触发源，所以检查必须挂在这里。
+#   这与「交易时段工作流不要开 schedule」的铁律不冲突：本工作流不发交易推送，
+#   只发一条飞书告警，晚到几小时可接受 —— 反而这正是它能跨延迟工作的原因。
+#
+# cron 时间的选择依据（实测）：
+#   本仓库 schedule 实测延迟 4h23m~4h32m（daily_position_monitor.yml 连续两日）。
+#   cron 定在 15:00 BJT（UTC 07:00）→ 实际执行约 19:30 BJT，此时当日全部档位
+#   （9:15 盘前 ~ 15:30 复盘）都已结束，不会把「还没到点」误判成「停推」。
+#   脚本只评估「已完整结束」的交易日，即使延迟更久（跨到次日）结论依然成立。
+#   详见 scripts/scheduler_health_check.py 头部注释。
+#
+# 安静约定：一切正常时不推送飞书（避免每天一条噪音），只在异常时告警，
+# 且异常时同时让本工作流变红 —— 飞书万一也挂了，Actions 列表里的红点是兜底信号。
+name: 调度器健康检查
+
+on:
+  schedule:
+    - cron: '0 7 * * 1-5'  # 北京时间 15:00（UTC 07:00），工作日
+  workflow_dispatch:
+    inputs:
+      always_report:
+        description: '正常情况也推送报告（用于验证飞书告警链路是否真的通）'
+        type: boolean
+        default: false
+      days:
+        description: '回看最近多少个完整交易日'
+        type: string
+        default: '3'
+
+# 只需要读 Actions 运行记录；不给额外权限。
+permissions:
+  actions: read
+
+jobs:
+  scheduler-health-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 拉取仓库代码
+        uses: actions/checkout@v4
+
+      - name: 设置Python环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装依赖
+        run: pip install requests
+
+      - name: 运行调度器健康检查
+        env:
+          # Actions 内置 token，已授予上面的 actions: read，用于统计运行次数。
+          # 注意：这与 Cloudflare Worker 里的 Secrets.GITHUB_TOKEN 是两个不同的凭据。
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          ALWAYS_REPORT: ${{ inputs.always_report || 'false' }}
+        run: |
+          python scripts/scheduler_health_check.py --days "${{ inputs.days || '3' }}"
