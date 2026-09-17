@@ -1,0 +1,485 @@
+{
+  "initial_capital": 5000.0,
+  "final_capital": 5351.97,
+  "total_pnl": 351.97,
+  "total_return_pct": 7.04,
+  "max_drawdown_pct": 8.12,
+  "total_trades": 29,
+  "win_rate": 37.9,
+  "win_trades": 11,
+  "loss_trades": 18,
+  "avg_win": 132.81,
+  "avg_loss": -61.6,
+  "profit_factor": 1.32,
+  "trades": [
+    {
+      "code": "600637",
+      "name": "东方明珠",
+      "entry_price": 10.89,
+      "exit_price": 11.75,
+      "shares": 100,
+      "pnl": 74.78,
+      "pnl_pct": 6.83,
+      "reason": "take_profit",
+      "entry_day": 86,
+      "exit_day": 87
+    },
+    {
+      "code": "600583",
+      "name": "海油工程",
+      "entry_price": 5.9,
+      "exit_price": 6.37,
+      "shares": 400,
+      "pnl": 178.73,
+      "pnl_pct": 7.57,
+      "reason": "take_profit",
+      "entry_day": 87,
+      "exit_day": 97
+    },
+    {
+      "code": "600998",
+      "name": "九州通",
+      "entry_price": 5.59,
+      "exit_price": 5.36,
+      "shares": 200,
+      "pnl": -56.83,
+      "pnl_pct": -5.06,
+      "reason": "stop_loss",
+      "entry_day": 98,
+      "exit_day": 102
+    },
+    {
+      "code": "600583",
+      "name": "海油工程",
+      "entry_price": 6.87,
+      "exit_price": 6.59,
+      "shares": 200,
+      "pnl": -67.57,
+      "pnl_pct": -4.9,
+      "reason": "stop_loss",
+      "entry_day": 102,
+      "exit_day": 103
+    },
+    {
+      "code": "600704",
+      "name": "物产中大",
+      "entry_price": 5.94,
+      "exit_price": 5.69,
+      "shares": 400,
+      "pnl": -104.53,
+      "pnl_pct": -4.4,
+      "reason": "stop_loss",
+      "entry_day": 85,
+      "exit_day": 104
+    },
+    {
+      "code": "002015",
+      "name": "协鑫能科",
+      "entry_price": 13.28,
+      "exit_price": 12.74,
+      "shares": 100,
+      "pnl": -65.68,
+      "pnl_pct": -4.93,
+      "reason": "stop_loss",
+      "entry_day": 109,
+      "exit_day": 110
+    },
+    {
+      "code": "600583",
+      "name": "海油工程",
+      "entry_price": 7.18,
+      "exit_price": 6.88,
+      "shares": 200,
+      "pnl": -70.17,
+      "pnl_pct": -4.87,
+      "reason": "stop_loss",
+      "entry_day": 111,
+      "exit_day": 113
+    },
+    {
+      "code": "000582",
+      "name": "北部湾港",
+      "entry_price": 10.39,
+      "exit_price": 11.21,
+      "shares": 100,
+      "pnl": 70.88,
+      "pnl_pct": 6.79,
+      "reason": "take_profit",
+      "entry_day": 111,
+      "exit_day": 117
+    },
+    {
+      "code": "600398",
+      "name": "海澜之家",
+      "entry_price": 6.08,
+      "exit_price": 5.83,
+      "shares": 200,
+      "pnl": -60.94,
+      "pnl_pct": -4.99,
+      "reason": "stop_loss",
+      "entry_day": 117,
+      "exit_day": 120
+    },
+    {
+      "code": "000967",
+      "name": "盈峰环境",
+      "entry_price": 8.12,
+      "exit_price": 8.76,
+      "shares": 200,
+      "pnl": 121.38,
+      "pnl_pct": 7.48,
+      "reason": "take_profit",
+      "entry_day": 115,
+      "exit_day": 125
+    },
+    {
+      "code": "000967",
+      "name": "盈峰环境",
+      "entry_price": 9.37,
+      "exit_price": 8.99,
+      "shares": 100,
+      "pnl": -49.28,
+      "pnl_pct": -5.23,
+      "reason": "stop_loss",
+      "entry_day": 125,
+      "exit_day": 127
+    },
+    {
+      "code": "002608",
+      "name": "江苏国信",
+      "entry_price": 8.67,
+      "exit_price": 8.32,
+      "shares": 200,
+      "pnl": -77.72,
+      "pnl_pct": -4.48,
+      "reason": "stop_loss",
+      "entry_day": 124,
+      "exit_day": 129
+    },
+    {
+      "code": "000967",
+      "name": "盈峰环境",
+      "entry_price": 10.37,
+      "exit_price": 11.18,
+      "shares": 200,
+      "pnl": 156.37,
+      "pnl_pct": 7.54,
+      "reason": "take_profit",
+      "entry_day": 146,
+      "exit_day": 148
+    },
+    {
+      "code": "000967",
+      "name": "盈峰环境",
+      "entry_price": 11.57,
+      "exit_price": 12.48,
+      "shares": 100,
+      "pnl": 80.07,
+      "pnl_pct": 6.89,
+      "reason": "take_profit",
+      "entry_day": 148,
+      "exit_day": 150
+    },
+    {
+      "code": "002266",
+      "name": "浙富控股",
+      "entry_price": 4.91,
+      "exit_price": 5.3,
+      "shares": 500,
+      "pnl": 186.29,
+      "pnl_pct": 7.58,
+      "reason": "take_profit",
+      "entry_day": 157,
+      "exit_day": 160
+    },
+    {
+      "code": "002266",
+      "name": "浙富控股",
+      "entry_price": 5.43,
+      "exit_price": 5.85,
+      "shares": 400,
+      "pnl": 163.93,
+      "pnl_pct": 7.55,
+      "reason": "take_profit",
+      "entry_day": 160,
+      "exit_day": 163
+    },
+    {
+      "code": "000582",
+      "name": "北部湾港",
+      "entry_price": 11.83,
+      "exit_price": 12.77,
+      "shares": 200,
+      "pnl": 179.2,
+      "pnl_pct": 7.57,
+      "reason": "take_profit",
+      "entry_day": 160,
+      "exit_day": 163
+    },
+    {
+      "code": "002608",
+      "name": "江苏国信",
+      "entry_price": 9.21,
+      "exit_price": 9.94,
+      "shares": 100,
+      "pnl": 61.69,
+      "pnl_pct": 6.66,
+      "reason": "take_profit",
+      "entry_day": 178,
+      "exit_day": 179
+    },
+    {
+      "code": "002608",
+      "name": "江苏国信",
+      "entry_price": 10.13,
+      "exit_price": 9.72,
+      "shares": 100,
+      "pnl": -52.46,
+      "pnl_pct": -5.15,
+      "reason": "stop_loss",
+      "entry_day": 179,
+      "exit_day": 180
+    },
+    {
+      "code": "002608",
+      "name": "江苏国信",
+      "entry_price": 10.43,
+      "exit_price": 10.0,
+      "shares": 100,
+      "pnl": -53.72,
+      "pnl_pct": -5.13,
+      "reason": "stop_loss",
+      "entry_day": 180,
+      "exit_day": 181
+    },
+    {
+      "code": "000582",
+      "name": "北部湾港",
+      "entry_price": 14.92,
+      "exit_price": 14.31,
+      "shares": 100,
+      "pnl": -72.56,
+      "pnl_pct": -4.85,
+      "reason": "stop_loss",
+      "entry_day": 181,
+      "exit_day": 182
+    },
+    {
+      "code": "002266",
+      "name": "浙富控股",
+      "entry_price": 5.76,
+      "exit_price": 5.52,
+      "shares": 200,
+      "pnl": -58.26,
+      "pnl_pct": -5.04,
+      "reason": "stop_loss",
+      "entry_day": 204,
+      "exit_day": 205
+    },
+    {
+      "code": "002007",
+      "name": "华兰生物",
+      "entry_price": 13.67,
+      "exit_price": 13.11,
+      "shares": 100,
+      "pnl": -67.32,
+      "pnl_pct": -4.91,
+      "reason": "stop_loss",
+      "entry_day": 211,
+      "exit_day": 213
+    },
+    {
+      "code": "600583",
+      "name": "海油工程",
+      "entry_price": 5.6,
+      "exit_price": 5.37,
+      "shares": 200,
+      "pnl": -56.91,
+      "pnl_pct": -5.06,
+      "reason": "stop_loss",
+      "entry_day": 213,
+      "exit_day": 214
+    },
+    {
+      "code": "600998",
+      "name": "九州通",
+      "entry_price": 5.22,
+      "exit_price": 5.0,
+      "shares": 200,
+      "pnl": -53.72,
+      "pnl_pct": -5.13,
+      "reason": "stop_loss",
+      "entry_day": 209,
+      "exit_day": 215
+    },
+    {
+      "code": "000981",
+      "name": "山子高科",
+      "entry_price": 3.17,
+      "exit_price": 3.04,
+      "shares": 400,
+      "pnl": -63.21,
+      "pnl_pct": -4.96,
+      "reason": "stop_loss",
+      "entry_day": 225,
+      "exit_day": 226
+    },
+    {
+      "code": "000582",
+      "name": "北部湾港",
+      "entry_price": 12.37,
+      "exit_price": 13.34,
+      "shares": 200,
+      "pnl": 187.54,
+      "pnl_pct": 7.58,
+      "reason": "take_profit",
+      "entry_day": 216,
+      "exit_day": 228
+    },
+    {
+      "code": "000582",
+      "name": "北部湾港",
+      "entry_price": 13.29,
+      "exit_price": 12.75,
+      "shares": 100,
+      "pnl": -65.72,
+      "pnl_pct": -4.93,
+      "reason": "stop_loss",
+      "entry_day": 228,
+      "exit_day": 231
+    },
+    {
+      "code": "002608",
+      "name": "江苏国信",
+      "entry_price": 7.6,
+      "exit_price": 7.58,
+      "shares": 100,
+      "pnl": -12.28,
+      "pnl_pct": -1.61,
+      "reason": "end_close",
+      "entry_day": 249,
+      "exit_day": 249
+    }
+  ],
+  "daily_values": [
+    {
+      "day": 85,
+      "capital": 3831.84,
+      "position_value": 1162.0,
+      "total_value": 4993.84,
+      "positions": 1
+    },
+    {
+      "day": 95,
+      "capital": 1546.27,
+      "position_value": 3666.0,
+      "total_value": 5212.27,
+      "positions": 2
+    },
+    {
+      "day": 105,
+      "capital": 5024.58,
+      "position_value": 0,
+      "total_value": 5024.58,
+      "positions": 0
+    },
+    {
+      "day": 115,
+      "capital": 3050.9,
+      "position_value": 1840.0,
+      "total_value": 4890.9,
+      "positions": 2
+    },
+    {
+      "day": 125,
+      "capital": 3229.27,
+      "position_value": 1795.0,
+      "total_value": 5024.27,
+      "positions": 2
+    },
+    {
+      "day": 135,
+      "capital": 4893.05,
+      "position_value": 0,
+      "total_value": 4893.05,
+      "positions": 0
+    },
+    {
+      "day": 145,
+      "capital": 4893.05,
+      "position_value": 0,
+      "total_value": 4893.05,
+      "positions": 0
+    },
+    {
+      "day": 155,
+      "capital": 5129.5,
+      "position_value": 0,
+      "total_value": 5129.5,
+      "positions": 0
+    },
+    {
+      "day": 165,
+      "capital": 5658.91,
+      "position_value": 0,
+      "total_value": 5658.91,
+      "positions": 0
+    },
+    {
+      "day": 175,
+      "capital": 5658.91,
+      "position_value": 0,
+      "total_value": 5658.91,
+      "positions": 0
+    },
+    {
+      "day": 185,
+      "capital": 5541.85,
+      "position_value": 0,
+      "total_value": 5541.85,
+      "positions": 0
+    },
+    {
+      "day": 195,
+      "capital": 5541.85,
+      "position_value": 0,
+      "total_value": 5541.85,
+      "positions": 0
+    },
+    {
+      "day": 205,
+      "capital": 5483.59,
+      "position_value": 0,
+      "total_value": 5483.59,
+      "positions": 0
+    },
+    {
+      "day": 215,
+      "capital": 5305.64,
+      "position_value": 0,
+      "total_value": 5305.64,
+      "positions": 0
+    },
+    {
+      "day": 225,
+      "capital": 1557.91,
+      "position_value": 3850.0,
+      "total_value": 5407.91,
+      "positions": 2
+    },
+    {
+      "day": 235,
+      "capital": 5364.24,
+      "position_value": 0,
+      "total_value": 5364.24,
+      "positions": 0
+    },
+    {
+      "day": 245,
+      "capital": 5364.24,
+      "position_value": 0,
+      "total_value": 5364.24,
+      "positions": 0
+    }
+  ]
+}

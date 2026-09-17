@@ -154,15 +154,18 @@ def resolve_report_mode(now: datetime) -> str:
 
     REPORT_MODE 由工作流按触发档位显式传入（9:15 档 → premarket，盘中档 → scan），
     不依赖当前时间，GitHub 调度延迟也不会把 9:15 档误判为盘中扫描。
+    例外：premarket 有延迟守卫——若在 9:45 之后才运行则跳过（见函数内注释）。
     """
     mode = os.environ.get("REPORT_MODE", "").strip().lower()
     if mode == "premarket":
-        # 守卫（仅定时触发时生效）：9:15 档若被 GitHub 延迟到 9:45 之后才运行，
-        # 跳过推送，避免迟到盘前报告与盘中实时报告撞车（用户投诉的场景）。
-        # 手动触发（TRIGGER=workflow_dispatch）不受守卫限制，可随时验证/兜底。
-        trigger = os.environ.get("TRIGGER", "").strip()
+        # 守卫（按时间判断，不区分触发来源）：9:15 档若被延迟到 9:45 之后才运行，
+        # 跳过推送，避免迟到盘前报告与盘中实时报告撞车。
+        # 注：GitHub schedule 已禁用、外部调度器走 workflow_dispatch，
+        #     早期"仅 TRIGGER==schedule 才守卫"的条件永不成立（空转），故改为按时间判断。
+        # 窗口外需要手动补发盘前报告时：用 morning_noon_push.yml 的 workflow_dispatch
+        # （该工作流直接调用 morning_noon_push.py，不经过本守卫）。
         hm = now.hour * 100 + now.minute
-        if trigger == "schedule" and hm >= 945:
+        if hm >= 945:
             print(f"⏰ 盘前档被延迟到 {now.strftime('%H:%M')}，已过盘前窗口，跳过（避免与盘中重复）")
             return "skip"
         return "premarket"

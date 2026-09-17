@@ -1,0 +1,26 @@
+{
+  "fixes": [
+    {
+      "time": "2026-09-07 14:25:36",
+      "field": "pe",
+      "original": -2994,
+      "fixed": -29.94,
+      "reason": "东财f162单位0.01，除以100"
+    },
+    {
+      "time": "2026-09-07 14:25:36",
+      "field": "debt_ratio",
+      "original": -4.686,
+      "fixed": 0,
+      "reason": "负债率不能为负，标记异常"
+    }
+  ],
+  "stats": {
+    "total_fixes": 2,
+    "last_fix_time": "2026-09-07 14:25:36",
+    "by_type": {
+      "pe": 1,
+      "debt_ratio": 1
+    }
+  }
+}

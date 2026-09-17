@@ -14,3 +14,12 @@ data/cache/
 logs/
 reports/output/*.json
 _strategy_review/
+
+# 用户误投放到仓库根目录的上传二进制（真实知识文档在 knowledge/ 下）
+user_upload*.bin
+
+# Cloudflare 配置含 account_id，不入库；模板见 cloudflare-worker/wrangler.toml.example
+cloudflare-worker/wrangler.toml
+
+# 其它代理工具留下的本地状态目录，不属于本项目代码
+.workbuddy/

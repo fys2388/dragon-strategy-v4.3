@@ -14,7 +14,7 @@ A 股 **MACD 多周期共振**短线选股系统（日线 + 60min + 30min + 15mi
 | GitHub | `fys2388/dragon-strategy-v4.3`（public，直接推 `main`） |
 | Python | 3.12.2 本地 / 3.11 GitHub Actions |
 | 依赖 | requests, pandas, numpy, akshare（`requirements.txt`） |
-| 测试 | 82 项，`python -m pytest tests -q` |
+| 测试 | 71 passed / **11 failed**（测试落后于代码，勿盲目改断言，见 `docs/HANDOFF.md` §6.0） |
 
 ## 2. 铁律（违反会导致推送中断或撞车）
 
@@ -62,7 +62,7 @@ scripts/
 cloudflare-worker/          外部调度器 + 东财 API 代理
   worker.js                 调度表（北京时间）→ workflow_dispatch；/proxy/* 东财代理
   api-proxy.js              代理实现
-  wrangler.toml             ⚠️ 未入库（含 Cloudflare account_id），重部署 Worker 前必须有它
+  wrangler.toml             ⚠️ 未入库（含 account_id，已 gitignore）；模板见 wrangler.toml.example
 
 config/feishu_config.json   本地飞书配置（含 webhook_url）
 data/                       运行产物与 Agent 学习数据
@@ -79,7 +79,7 @@ knowledge/                  知识库文档
 | `IS_CLOUD` | `true`（仅 Actions 设置） | 云端跳过东财直连新浪/腾讯，绕过海外 IP 限流 |
 | `TEST_MODE` | `true` | 跳过交易时段检查（手动验证用） |
 | `REPORT_MODE` | `premarket` / `scan` / 空(自动) | 报告类型分派（见铁律 4） |
-| `TRIGGER` | `schedule` / `workflow_dispatch` | 盘前守卫判定来源 |
+| `TRIGGER` | `schedule` / `workflow_dispatch` | 仅记录用，**守卫已不再依赖它**（见坑 8） |
 | `PUSH_FEISHU` / `PUSH_ALL_POSITIONS` | 脚本内读取 | 推送开关 |
 | Worker secret `GITHUB_TOKEN` | Cloudflare Worker Secrets，需 `repo` 权限 | 调度器触发 workflow_dispatch |
 
@@ -90,7 +90,7 @@ knowledge/                  知识库文档
 ```bash
 # 1. 改完先编译 + 跑全量单测
 python -m py_compile scripts/v43_push.py strategies/macd_resonance/scanner.py
-python -m pytest tests -q            # 期望 82 passed
+python -m pytest tests -q            # 当前基线 71 passed / 11 failed（11 项为已知过时测试，见 docs/HANDOFF.md §6.0）
 
 # 2. 提交（中文提交信息，与现有历史一致）
 git add <files> && git commit -m "feat: xxx"
@@ -151,10 +151,12 @@ gh api "repos/fys2388/dragon-strategy-v4.3/contents/scripts/v43_push.py" -H "Acc
 5. **`gh api` 匿名请求会 403 限流**；`gh api` 不支持 `--output`，下载用 `Invoke-WebRequest`。
 6. **YAML 加 `-H "Accept: application/vnd.github.raw"` 后再用 `--jq` 会报错**（raw 不是 JSON）。
 7. **PowerShell 里嵌套双引号正则易解析失败**，复杂表达式改用 Python 或简单 Select-String。
-8. **盘前守卫目前空转**：`v43_push.py` 的守卫条件是 `TRIGGER == "schedule" and hm >= 945`，
-   但 schedule 已禁用、Worker 走 `workflow_dispatch`，所以条件永远不成立。
-   若盘前档被延迟（如 9:15 → 10:31），盘前报告会撞上盘中报告。
-   **修复方向**：守卫改成按时间判断而不看 TRIGGER，或由 Worker 侧判断时间后再触发。
+8. **盘前守卫只认时间，窗口外补发要走另一个工作流**：守卫条件是
+   `mode == "premarket" and hm >= 945 → skip`，**不看触发来源**
+   （早期版本要求 `TRIGGER == "schedule"`，但 schedule 已禁用、Worker 走 workflow_dispatch，
+   条件永不成立 = 空转，已修）。
+   所以 9:45 之后手动触发 `strategy_cloud_deploy.yml -f report_mode=premarket` 会被跳过；
+   **窗口外补发盘前报告**请用 `morning_noon_push.yml`（`workflow_dispatch`，不经守卫）。
 9. **调度器是单点**：Cloudflare Worker + 其 `GITHUB_TOKEN`。Worker 挂掉或 token 过期 = 静默停推，
    仓库里没有任何东西会告警。加监控是下一步该做的事。
 10. **`.workbuddy/` 是另一个代理留下的状态目录**（memory/automations），与本项目代码无关，别提交。
@@ -163,6 +165,8 @@ gh api "repos/fys2388/dragon-strategy-v4.3/contents/scripts/v43_push.py" -H "Acc
 
 - **改盘中节奏** → 改 `cloudflare-worker/worker.js` 的 `SCHEDULE` 数组（北京时间），然后重部署 Worker（需要 `wrangler.toml`，见 `docs/HANDOFF.md`）。工作流端不用改。
 - **改盘前报告内容** → `scripts/morning_noon_push.py` 的 `build_premarket_report()`。
+- **窗口外手动补发盘前报告** → `gh workflow run "Morning & Noon Report Push" --repo fys2388/dragon-strategy-v4.3`
+  （走 `morning_noon_push.yml`，不经盘前守卫；`strategy_cloud_deploy.yml` 在 9:45 后会跳过 premarket）。
 - **改盘中报告格式** → `scripts/v43_push.py` 的 `build_message()`（实际在 `scanner.py`）。
 - **改选股逻辑** → `strategies/macd_resonance/{scanner,filters,signal_engine,market_gate}.py`。
 - **加数据源** → `data_source.py` + `data_validator.py` 降级链。
@@ -170,7 +174,8 @@ gh api "repos/fys2388/dragon-strategy-v4.3/contents/scripts/v43_push.py" -H "Acc
 
 ## 10. 当前状态（截至本文件写入）
 
-- 远端 `main` 已同步本地，测试 82 项全过。
+- 远端 `main` 已同步本地。**测试基线 71 passed / 11 failed**（11 项为测试落后于代码，见 `docs/HANDOFF.md` §6.0）。
 - 盘前报告已并入 `strategy_cloud_deploy.yml` 的 `premarket` 档，`morning_noon_push.yml` 定时已停用。
 - 云端双分支已验证：`premarket` 与 `scan` 均推送成功（HTTP 200）。
+- 盘前守卫已改为纯时间判断（9:45 后跳过），不再依赖 `TRIGGER`。
 - 未决事项与未跟踪文件清单 → `docs/HANDOFF.md`。

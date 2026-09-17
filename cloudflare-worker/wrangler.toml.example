@@ -1,0 +1,25 @@
+# wrangler.toml 模板 —— 复制为 wrangler.toml 并填入真实值后再部署
+#
+#   cp wrangler.toml.example wrangler.toml   (Linux/macOS)
+#   copy wrangler.toml.example wrangler.toml (Windows)
+#
+# 真实 wrangler.toml 含 Cloudflare account_id，已被 .gitignore 排除，不入库。
+# account_id 获取方式：Cloudflare 控制台 → 右上角账户头像 → Account settings →
+# Overview 页面 URL 中 `accounts/<account_id>/` 那一段。
+#
+# 部署命令（需要 wrangler CLI + 有效的 wrangler.toml）：
+#   npx wrangler deploy --config wrangler.toml
+#
+# Worker 还需要在控制台配置两个 Secrets：
+#   GITHUB_TOKEN  —— GitHub PAT，需要 repo 权限（调度器触发 workflow_dispatch 用）
+# 以及一个 Scheduled event（Cron Triggers）：
+#   */15 * * * MON,TUE,WED,THU,FRI   (UTC，Worker 内部判断北京时间交易时段)
+
+name = "macd-strategy-scheduler"
+main = "worker.js"
+compatibility_date = "2026-09-01"
+account_id = "<你的 Cloudflare account_id>"
+
+# 每 15 分钟触发一次，Worker 内部判断交易时段
+[triggers]
+crons = ["*/15 * * * MON,TUE,WED,THU,FRI"]
