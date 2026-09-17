@@ -1,11 +1,9 @@
 #!/bin/bash
 # ============================================================
-# 本机定时运行脚本（Linux/macOS 版，Windows 用户请用 run_local.ps1）
-# 用法（crontab 示例，周一至周五盘中）：
-#   15 9 * * 1-5  cd /path/to/repo && bash scripts/run_local.sh auto >> logs/local_cron.log 2>&1
-#   0,30 10-11 * * 1-5 cd /path/to/repo && bash scripts/run_local.sh auto >> logs/local_cron.log 2>&1
-#   0,30 13-14 * * 1-5 cd /path/to/repo && bash scripts/run_local.sh auto >> logs/local_cron.log 2>&1
-#   50 14 * * 1-5 cd /path/to/repo && bash scripts/run_local.sh auto >> logs/local_cron.log 2>&1
+# 本机手动运行脚本（Linux/macOS 版，Windows 用户请用 run_local.ps1）
+# ⚠️ 仅限手动跑一次验证链路，不要写进 crontab 定时推送（AGENTS.md 铁律 1）。
+#   旧的本机定时推送方案已废弃，原文归档于 archive/README_LOCAL_RUN_DEPRECATED.md。
+# 用法：bash scripts/run_local.sh auto
 # ============================================================
 set -e
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"

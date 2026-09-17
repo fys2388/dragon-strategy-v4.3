@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 # ============================================================
-# 本机定时运行脚本（Windows PowerShell 版）
+# 本机手动运行脚本（Windows PowerShell 版）
+# ⚠️ 仅限手动跑一次验证链路，不要注册为「任务计划程序」定时推送（AGENTS.md 铁律 1）。
+#   旧的本机定时推送方案已废弃，原文归档于 archive/README_LOCAL_RUN_DEPRECATED.md。
 # 用法：powershell.exe -ExecutionPolicy Bypass -File "E:\AI\策略\dragon-strategy-v4.3\scripts\run_local.ps1"
-# 推荐用「任务计划程序」在交易日按计划触发（见 README_LOCAL_RUN.md）
 # ============================================================
 param(
     [string]$RepoDir = "E:\AI\策略\dragon-strategy-v4.3",

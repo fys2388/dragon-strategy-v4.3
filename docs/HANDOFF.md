@@ -198,10 +198,28 @@ gh workflow run "调度器健康检查" --repo fys2388/dragon-strategy-v4.3 -f a
 
 ### P1 — 一周内
 
-**6.4 `README.md` 已过期**
-README 仍写「`strategy-push.yml` / `strategy_cloud_deploy.yml` 自动运行」「每 5 分钟」「unittest 16 项」。
-实际是：外部调度器（Cloudflare Worker）触发、每 30 分钟、pytest 92 项，另有调度器健康检查监控。
-建议把 README 的「部署」章节改为指向 `AGENTS.md`（权威来源），不要在 README 里重复维护这些数字。
+**6.4 `README.md` 已过期 — ✅ 已修（2026-09-17）**
+原 README 有 5 处事实性错误，其中「部署」章节最危险：
+
+| 原文 | 实际 | 危害 |
+|---|---|---|
+| 「推送代码到 main，工作流自动运行（`strategy-push.yml` / `strategy_cloud_deploy.yml`）」 | 交易时段工作流的 `schedule` **全部禁用**，推 main 不触发任何推送；唯一自动触发源是 Cloudflare Worker | 最危险：会让人以为改完代码自动生效，排查半天 |
+| 「`python -m unittest discover -s tests`（26 项）」 | `python -m pytest tests -q`，**92 项** | 用错命令 + 严重误判覆盖度 |
+| 「大盘门控 ≥4 分（可开仓）」 | `MARKET_GATE.open_threshold = 3.0`（≥3 可开仓、≥4 用标准档严格信号） | 误判策略行为 |
+| 「量能：当日量 > 前 5 日均量 × 1.3」 | `SIGNAL.volume_ratio_min`：标准档 1.2 / 宽松档 1.1 | 误判入场条件 |
+| （未提及） | 实际有 **3 个扫描器**（MACD 共振 / 超跌反弹 / 趋势突破）+ 大盘双模式 standard/relaxed | 根本不知道系统同时跑了几套策略 |
+
+新 README 的做法：**只讲结构，不复述参数**——参数一律指向 `config.py`（唯一来源），
+权威说明指向 `AGENTS.md`。这样下次改参数不会再次让 README 过期。
+
+**顺带发现并归档：`README_LOCAL_RUN.md` 描述的是已废弃架构 — ✅ 已处理**
+该文档要求用 Windows 任务计划程序**本机每 5 分钟定时推送**，与铁律 1「部署只在云端」直接冲突，
+照做会造成 **云端 + 本机双份推送**；且它「验证」章节引用的诊断行格式（`📡 数据源：… | 校验：…`）
+已在提交 `1fdc849`「推送极简版」中被删除。
+
+已 `git mv` 到 `archive/README_LOCAL_RUN_DEPRECATED.md` 并加 ⛔ 废弃头
+（保留原文以便追溯设计意图，git 历史保留、可逆）。
+`scripts/run_local.ps1` / `run_local.sh` 保留不动，仅限**手动跑一次做链路验证**。
 
 **6.5 GitHub Actions 配额**
 节奏已是每 30 分钟。若再加密，需先评估免费配额（提交 `63df125` 的动机）。

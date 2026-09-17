@@ -37,16 +37,17 @@ A 股 **MACD 多周期共振**短线选股系统（日线 + 60min + 30min + 15mi
 ## 3. 架构速查
 
 ```
-strategies/macd_resonance/   39 个模块，主链路：
-  scanner.py                扫描入口（标的池→初筛→硬过滤→共振信号→去重冷却）
-  market_gate.py            大盘门控（≥4 分才开仓）
+strategies/macd_resonance/   40 个模块，主链路：
+  scanner.py                ① 扫描入口（标的池→初筛→硬过滤→共振信号→去重冷却）
+  market_gate.py            大盘门控（7 分制：≥3 分可开仓=宽松档，≥4 分=标准档严格信号）
   signal_engine.py          多周期共振信号（多/空/离场）
   filters.py                硬过滤（一票否决）
   data_source.py            多数据源（东财/新浪/腾讯/AkShare + Cloudflare 代理）
   data_validator.py         数据源降级链 + 飞书告警
   portfolio_manager.py      持仓与离场信号
   config.py                 参数集中配置（1 万本金风控）
-  breakout.py               趋势突破（第二策略）
+  oversold_rebound.py       ② 超跌反弹（第二策略，由 v43_push.py 串行调用）
+  breakout.py               ③ 趋势突破（第三策略，由 v43_push.py 串行调用）
   fundamental_filter.py / huangyang_scorer.py   基本面打分
   tracking.py / weekly_optimizer.py / evolution_engine.py   Agent 学习闭环
 
@@ -72,7 +73,8 @@ cloudflare-worker/          外部调度器 + 东财 API 代理
 config/feishu_config.json   本地飞书配置（含 webhook_url）
 data/                       运行产物与 Agent 学习数据
 logs/                       运行日志（scanner_YYYYMMDD.log 等）
-archive/                    V4.3 旧策略归档
+archive/                    V4.3 旧策略归档 + 一次性补丁脚本(patch_scripts/) + 已废弃文档
+                            （含 README_LOCAL_RUN_DEPRECATED.md，勿按其中的本机定时推送执行）
 knowledge/                  知识库文档
 ```
 
