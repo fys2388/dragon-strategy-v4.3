@@ -32,6 +32,7 @@
 # 最后在 GitHub 仓库 Settings → Secrets 加一个：
 #   WORKER_HEALTH_URL = https://<你的-worker-子域名>.workers.dev
 #   （填 Worker 的根 URL，不带 /health；健康检查脚本会自动补上）
+#   本仓库实际值：https://macd-strategy-scheduler.fys2388.workers.dev
 
 # 心跳 KV（先跑 wrangler kv namespace create 拿到 id 再填）
 kv_namespaces = [

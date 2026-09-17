@@ -254,6 +254,36 @@ npx wrangler deploy --config wrangler.toml
 最后档位 15:30，6.0h 意味着「最后成功 dispatch 在 13:30 BJT 之后」就算新鲜；
 Worker 在 13:30 之前挂掉会被判为陈旧。想更早发现就调小。
 
+#### 已部署状态（2026-09-17）
+
+Cloudflare 侧三步已全部完成并端到端验证：
+
+| 项 | 值 |
+|---|---|
+| Worker URL | `https://macd-strategy-scheduler.fys2388.workers.dev` |
+| KV namespace | `HEARTBEAT`（binding 名与 `worker.js` 里的 `env.HEARTBEAT` 对应） |
+| 部署版本 | `9305d0db-f3e3-4df4-b986-3f1ad0f5f621` |
+| Cron | `*/15 * * * MON,TUE,WED,THU,FRI`（与改动前一致，未变） |
+| GitHub Secret | `WORKER_HEALTH_URL` 已建 |
+
+部署用的是仓库里已有的 wrangler CLI 凭据（`~/.wrangler/config/default.toml`，
+`wrangler whoami` 显示 account `Fys2388@gmail.com`）。`wrangler.toml` 已被 `.gitignore`
+排除（第 22 行），含真实 `account_id` 与 KV `id`，**不入库**。
+
+验证方式：往 KV 临时写一个 `last_dispatch` 键 → `GET /health` 读到 → 删掉 → 再读为 `null`，
+确认写入/读取/删除三段链路在**生产环境**都通。全程只用了临时键，不留脏数据。
+
+⚠️ **第一条真实心跳要等到下一个 9:15 档**（北京时间工作日）。在此之前 KV 是空的，
+`/health` 返回 `last_dispatch: null`。脚本已对此做了区分，不会误报：
+
+- `last_dispatch == null` → 只打印一条提示并跳过陈旧判定。**不能在这里报 🚨**，
+  否则「刚部署完」会被误报成「Worker 停摆」，半夜白查一轮控制台。
+  「Worker 从来没 dispatch 过」由 `silent` 分支（按 GitHub 运行次数判定）兜住，不依赖心跳。
+- `dispatch_no_run` 只在**确实查到了可信的 GitHub 运行记录**时才判：
+  若回看窗口内的日期全部是 `push_error`（GitHub API 调用失败），说明是检查器自己查不到，
+  此时判定 `dispatch_no_run` 就是把「检查器坏了」误报成「GitHub 未接单」。
+  与全脚本一贯的「查不到 ≠ 没推送」原则一致。
+
 **6.3 未跟踪文件（21 项）— ✅ 已处理（2026-08-25）**
 
 | 类型 | 实际处理 | 数量 |

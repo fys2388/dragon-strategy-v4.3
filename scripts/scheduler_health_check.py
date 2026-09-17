@@ -303,18 +303,26 @@ def heartbeat_problems(hb: Dict, per_day: List[Dict]) -> List[Tuple[str, str, st
 
     # 2) 没有任何近期成功记录 → Worker 本身没在跑
     dispatch_age = age_hours(last_dispatch)
-    if dispatch_age is None or dispatch_age > MAX_HEARTBEAT_AGE_H:
+    if dispatch_age is None:
+        # KV 里还没有任何成功记录：通常是刚部署完、或今天还没到第一个档位（9:15）。
+        # 不能报停推 —— 那会把「刚上线」误报成「停摆」，半夜白查一轮控制台。
+        # 「Worker 从来没 dispatch 过」这种情况由上面的 silent 分支（按运行次数判定）兜住。
+        print("   ⚠️ Worker 心跳里还没有成功的 dispatch 记录"
+              "（可能刚部署，或今天还没到 9:15 档），跳过陈旧判定")
+    elif dispatch_age > MAX_HEARTBEAT_AGE_H:
         problems.append(("🚨", "heartbeat_stale",
                          f"Worker 最近 {MAX_HEARTBEAT_AGE_H:.1f} 小时内没有成功的 dispatch 记录"
                          f"（最后成功：{beijing_time(last_dispatch)}）→ "
                          f"Worker 未运行/被暂停/被删除，或 Cron 触发器丢失"))
     else:
-        # 3) 心跳新鲜但 GitHub 侧一次都没跑 → 问题在 GitHub，不在 Worker
-        total_push = sum(r.get("push", 0) for r in per_day if not r.get("push_error"))
-        if total_push == 0:
+        # 3) 心跳新鲜但 GitHub 侧一次都没跑 → 问题在 GitHub，不在 Worker。
+        # 只在「确实查到了可信的 GitHub 运行记录」时才判，否则会把
+        # 「检查器自己查不到」误报成「GitHub 未接单」。
+        reliable = [r for r in per_day if not r.get("push_error")]
+        if reliable and sum(r.get("push", 0) for r in reliable) == 0:
             problems.append(("🚨", "dispatch_no_run",
                              f"Worker 在 {beijing_time(last_dispatch)} 成功 dispatch，"
-                             f"但最近 {len(per_day)} 个交易日 GitHub 侧 0 次运行记录 → "
+                             f"但最近 {len(reliable)} 个交易日 GitHub 侧 0 次运行记录 → "
                              f"GitHub 未接单（Actions 配额耗尽或服务异常），Worker 本身是好的"))
 
     return problems
