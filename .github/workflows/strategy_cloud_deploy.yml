@@ -80,7 +80,7 @@ jobs:
           # ⚠️ 必须逐文件判断存在性：git add 只要有一个 pathspec 不存在就整批失败（exit 128），
           # 连已存在的文件也不会被 stage。此前把多个路径写在一行并用 "2>/dev/null || true"
           # 吞掉错误，导致 tracking.jsonl 每次运行都被清掉、永远进不了仓库 → Agent 累计样本恒为 0、
-          # 健康度状态（system_health.json）也无从持久化。详见 docs/HANDOFF.md §6.0。
+          # 健康度状态（system_health.json）也无从持久化。详见 docs/HANDOFF.md §6.4。
           for f in data/tracking.jsonl \
                    data/system_health.json \
                    data/optimization_state.json \

@@ -204,6 +204,7 @@ gh api "repos/fys2388/dragon-strategy-v4.3/contents/scripts/v43_push.py" -H "Acc
     并把 `data/system_health.json` 补进列表。**写 Actions 里的 git 步骤时不要用
     `|| true` / `2>/dev/null` 掩盖错误**——那等于把唯一的失败信号也删掉了。
     验证方法：跑完看日志里有没有 `已暂存学习数据: <file>` 和 `学习数据已回传仓库`。
+    完整诊断 + 「为什么长期无推荐」的遗留分析见 `docs/HANDOFF.md` §6.4 / §6.4.1。
 
 ## 9. 常见任务
 
