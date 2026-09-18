@@ -193,6 +193,17 @@ gh api "repos/fys2388/dragon-strategy-v4.3/contents/scripts/v43_push.py" -H "Acc
     并单独出一档「⚠️ 本次未能完整判定」，与真正的 🚨 停推分开。
     另外：**workflow 结论 success 不等于飞书真的收到**（推送失败可能被脚本吞掉），
     现有监控只能保证「调度发生了」，不能保证「消息送达」。
+13. **`git add` 只要有一个 pathspec 不存在就整批失败（exit 128），连已存在的文件也不会被 stage**。
+    `strategy_cloud_deploy.yml` 的回传步骤曾把 7 个路径写在一行、再用 `2>/dev/null || true`
+    吞掉错误 → 干净 checkout 里不存在的文件让整个 `git add` 直接失败 → `git diff --cached --quiet`
+    返回 0（报无变化）→ 每次都打印「无学习数据变化，跳过提交」。
+    **后果**：`data/tracking.jsonl` 每次运行都被写完又清掉，永远进不了仓库 →
+    Agent 周度优化累计样本恒为 0（每周只推「继续收集数据」）、`health_monitor` 与 `breakout`
+    的饥饿度机制因读不到 tracking 数据永远停在 Level 0、永远不会自动放宽。
+    **修复（2026-09-18）**：改成逐文件 `if [ -f "$f" ]; then git add "$f"; fi` 循环，
+    并把 `data/system_health.json` 补进列表。**写 Actions 里的 git 步骤时不要用
+    `|| true` / `2>/dev/null` 掩盖错误**——那等于把唯一的失败信号也删掉了。
+    验证方法：跑完看日志里有没有 `已暂存学习数据: <file>` 和 `学习数据已回传仓库`。
 
 ## 9. 常见任务
 
@@ -212,6 +223,13 @@ gh api "repos/fys2388/dragon-strategy-v4.3/contents/scripts/v43_push.py" -H "Acc
 - 盘前报告已并入 `strategy_cloud_deploy.yml` 的 `premarket` 档，`morning_noon_push.yml` 定时已停用。
 - 云端双分支已验证：`premarket` 与 `scan` 均推送成功（HTTP 200）。
 - 盘前守卫已改为纯时间判断（9:45 后跳过），不再依赖 `TRIGGER`。
+- **Agent 学习链死结已修（2026-09-18，见坑 13）**：`strategy_cloud_deploy.yml` 的回传步骤
+  原先用 `git add 多路径 2>/dev/null || true`，因 `git add` 一个路径不存在就整批失败，
+  `data/tracking.jsonl` 永远进不了仓库 → 累计样本恒为 0、健康度/饥饿度机制永久失效。
+  已改为逐文件存在性判断，并补入 `data/system_health.json`。
+  **下一次运行后请确认**：日志出现 `已暂存学习数据: data/tracking.jsonl` 且仓库里真的多出一个
+  提交（`gh api .../actions/commits` 或 `git log -- data/tracking.jsonl`）。
+  ⚠️ 修好之后才真正开始积累样本，短期（1-2 周）周度优化仍会因样本不足而不做参数调整。
 - 调度器单点监控已上线（`scheduler_health_check.yml` + `scripts/scheduler_health_check.py`）：
   每天 15:00 BJT 检查最近 3 个完整交易日的 `workflow_dispatch` 次数，异常才推飞书。
   实测 Worker 当前健康（09-14~09-16 各 10+/1 次，调度延迟约 15s）。

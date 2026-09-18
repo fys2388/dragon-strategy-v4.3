@@ -296,6 +296,80 @@ Cloudflare 侧三步已全部完成并端到端验证：
 
 > 移动是可逆的（git 历史保留），删除类操作均未做。
 
+**6.4 Agent 学习链死结：数据从未落库 — ✅ 已修（2026-09-18）**
+
+**现象**：`tracking.py` 每次运行都正确写入 `data/tracking.jsonl`（日志 `[跟踪] 新记录 N 只推荐股`），
+但远端仓库里 `tracking.jsonl` / `evolution_log.jsonl` / `user_feedback.jsonl` **全部不存在**，
+`strategy_history.jsonl` 是 **0 字节**，`optimization_state.json` 停在 2026-09-08 不再更新。
+周度优化每周只推一句「累计样本：0只，本周不做参数优化，继续收集数据」。
+
+**根因**：`strategy_cloud_deploy.yml` 回传步骤把 7 个路径写在一行，再套 `2>/dev/null || true`：
+```bash
+# 旧写法（已废）
+git add data/tracking.jsonl data/optimization_state.json data/evolution_log.jsonl \
+        data/performance_summary.json data/weekly_optimization_report.json data/user_feedback.jsonl 2>/dev/null || true
+```
+`git add` **只要有一个 pathspec 不存在就整批失败**（exit 128），连已存在的文件也不会被 stage。
+干净 checkout 里 `evolution_log.jsonl` / `user_feedback.jsonl` / `performance_summary.json` 不存在
+→ 整条 `git add` 失败 → 被 `2>/dev/null || true` 吞掉 → `git diff --cached --quiet` 返回 0
+→ 每次都走「无学习数据变化，跳过提交」分支。
+
+本机实测（临时仓库，`git add 存在.txt 不存在.jsonl`）：
+
+| 观测项 | 结果 |
+|---|---|
+| `git add` 退出码 | **128**，`fatal: pathspec '...' did not match any files` |
+| 存在的文件有没有被 stage | **没有**，仍是 `??` 未跟踪 |
+| `git diff --cached --quiet` | exit **0**（报无变化） |
+
+**连带失效的机制**（都依赖 tracking 数据）：
+
+| 机制 | 位置 | 实际表现 |
+|---|---|---|
+| 周度参数优化 | `weekly_optimization.py` | 累计样本恒为 0 → 永不优化 |
+| 系统健康度自放宽 | `health_monitor.py`（`v43_push.py:234`） | `🟢 正常（Level 0）`、`连续0推荐：0天`；其状态文件 `data/system_health.json` **不在仓库也不在 git add 列表**，每次运行都是全新状态 |
+| 趋势突破饥饿度放宽 | `breakout.py`（连续 3/5/7 天 0 推荐逐级放宽） | 读不到 tracking → 永不触发 |
+| 用户反馈通道 | `user_feedback.jsonl` | 文件不存在 → 永远「暂无」 |
+
+**修复**：改为逐文件存在性判断（`if` 语句显式豁免 `set -e`，不会误中断步骤），
+并把 `data/system_health.json` 补进列表：
+```bash
+for f in data/tracking.jsonl \
+         data/system_health.json \
+         data/optimization_state.json \
+         data/evolution_log.jsonl \
+         data/performance_summary.json \
+         data/weekly_optimization_report.json \
+         data/user_feedback.jsonl; do
+  if [ -f "$f" ]; then
+    git add "$f"
+    echo "已暂存学习数据: $f"
+  fi
+done
+```
+
+**验证方法**：下一次运行后日志应出现 `已暂存学习数据: data/tracking.jsonl` 与 `学习数据已回传仓库`，
+且 `git log -- data/tracking.jsonl` 能看到提交。
+⚠️ 修好之后样本才开始积累，**短期 1–2 周周度优化仍会因样本不足而不做参数调整**，这是正常的。
+
+### 6.4.1 遗留：为什么长期「无推荐」（本次未改，属策略行为变更）
+
+2026-09-18 11:30 一次运行的真实漏斗：
+
+| 策略 | 漏斗 | 卡点 |
+|---|---|---|
+| MACD共振 | 1200 → 初筛107 → 硬过滤80 → **共振0** | 80 只候选里 日线零轴上方 52 只，但 60min金叉仅 5 只、30min金叉 4 只、15min上穿 3 只；共振要求 4 周期同时满足，3~5 只的交集必然为空。另有 28 只被「空头规避」排除 |
+| 超跌反弹 | 1200 → 96 → **超跌0** | 自适应选了「牛市配置」：`drop_20d_min=20%` + `today_gain_min=3%`。当天涨停 63、跌停 0，牛市里要求个股先跌 20% 才配做超跌反弹 = 结构性不可能命中（`adaptive_config.py OVERSOLD_PARAMS`） |
+| 趋势突破 | 1200 → 96 → 突破1 → **推荐1** | 唯一产出，且日志 `基本面硬过滤降级：一般及以上无标的，放宽到偏弱及以上`，故标的标「基本面偏弱」 |
+
+共振根因是**时间尺度错配**：日线 MACD 是持续状态，分钟级金叉是瞬时事件，要求 60/30/15min
+同时处于金叉态在实盘极罕见。若要放宽，考虑 15min 条件从「必须金叉」改为「金叉或零轴上方」。
+
+**另一个自相矛盾**：报告头部 `🧠 AI市场状态：震荡下行（sideways_down）`、`仓位25%` 来自
+`market_cluster.py`（且 `scikit-learn` 未安装、走规则降级分支）；选股参数用的却是
+`market_regime.py` 的 `bull_market`（牛市配置）。**仓位按震荡下行给，选股按牛市跑**。
+统一两个判定器需要一次口径决策，未在本次处理。
+
 ### P1 — 一周内
 
 **6.4 `README.md` 已过期 — ✅ 已修（2026-09-17）**

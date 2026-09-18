@@ -77,11 +77,26 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/tracking.jsonl data/optimization_state.json data/evolution_log.jsonl data/performance_summary.json data/weekly_optimization_report.json data/user_feedback.jsonl 2>/dev/null || true
+          # ⚠️ 必须逐文件判断存在性：git add 只要有一个 pathspec 不存在就整批失败（exit 128），
+          # 连已存在的文件也不会被 stage。此前把多个路径写在一行并用 "2>/dev/null || true"
+          # 吞掉错误，导致 tracking.jsonl 每次运行都被清掉、永远进不了仓库 → Agent 累计样本恒为 0、
+          # 健康度状态（system_health.json）也无从持久化。详见 docs/HANDOFF.md §6.0。
+          for f in data/tracking.jsonl \
+                   data/system_health.json \
+                   data/optimization_state.json \
+                   data/evolution_log.jsonl \
+                   data/performance_summary.json \
+                   data/weekly_optimization_report.json \
+                   data/user_feedback.jsonl; do
+            if [ -f "$f" ]; then
+              git add "$f"
+              echo "已暂存学习数据: $f"
+            fi
+          done
           if git diff --cached --quiet; then
             echo "无学习数据变化，跳过提交"
           else
-            git commit -m "Agent学习数据回传：tracking记录+优化参数+进化日志（自动）"
+            git commit -m "Agent学习数据回传：tracking记录+健康状态+优化参数+进化日志（自动）"
             git push
             echo "学习数据已回传仓库"
           fi
