@@ -132,7 +132,7 @@ LLM = {
     "provider": "sensenova",       # sensenova / deepseek / openai / openrouter / 自定义
     "model": "sensenova-6.8-flash-lite",  # sensenova-6.8-flash-lite / deepseek-chat / gpt-4o-mini 等
     "api_base": "https://token.sensenova.cn/v1",  # OpenAI 兼容 API 地址
-    "timeout": 15,                  # 请求超时（秒）
+    "timeout": 30,                  # 请求超时（秒）— SenseNova 云端响应较慢，15s 不够
     "max_tokens": 500,              # 单次回复最大 token
     "temperature": 0.3,             # 低温度=更稳定，分析类建议 0.3
     "retry": 1,                     # 失败重试次数
