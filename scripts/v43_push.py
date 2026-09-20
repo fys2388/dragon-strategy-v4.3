@@ -258,18 +258,8 @@ def main():
     # AI打分过滤：只保留上涨概率>55%的候选
     result["entries"] = ai_filter_entries(result.get("entries", []), "resonance")
     msg = build_message(result)
-    # 智能分析（如果有推荐股票）
+    # 多维详情（仅共振推荐有）
     resonance_entries = result.get("entries", [])
-    if resonance_entries:
-        try:
-            analyzer = StockAnalyzer()
-            analyzed = analyzer.analyze_batch(resonance_entries)
-            analysis_msg = build_analysis_message(analyzed)
-            if analysis_msg:
-                msg = msg + analysis_msg
-        except Exception as e:
-            print(f"⚠️ 智能分析失败: {e}")
-    # 多维详情
     if resonance_entries:
         multi_detail = add_multi_dimension_detail(resonance_entries)
         if multi_detail:
@@ -396,8 +386,29 @@ def main():
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         )
 
-    # 合并所有策略消息为一条推送
+    # ===== LLM 智能分析：对所有策略的推荐统一分析 =====
+    all_recommended = []
+    for entries_list in [
+        result.get("entries", []),
+        oversold_result.get("entries", []),
+        breakout_result.get("entries", []),
+    ]:
+        all_recommended.extend(entries_list)
+
     combined_msg = cluster_header + sector_report + "\n\n".join(all_messages)
+
+    if all_recommended:
+        try:
+            print(f"\n🧠 开始 LLM 智能分析（{len(all_recommended)} 只推荐）...")
+            analyzer = StockAnalyzer()
+            analyzed = analyzer.analyze_batch(all_recommended)
+            analysis_msg = build_analysis_message(analyzed)
+            if analysis_msg:
+                combined_msg += analysis_msg
+        except Exception as e:
+            print(f"⚠️ LLM 智能分析失败（降级为无分析推送）: {e}")
+
+    # 合并所有策略消息为一条推送
     push_ok = _send_text(combined_msg)
     print(f"\n📨 合并推送完成，共{len(all_messages)}个策略模块，市场状态={cluster_info.get('cluster_name_cn', '未知')}")
 
