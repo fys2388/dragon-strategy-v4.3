@@ -41,6 +41,26 @@ def is_golden_cross(dif: pd.Series, dea: pd.Series) -> bool:
     return bool(dif.iloc[-2] <= dea.iloc[-2] and dif.iloc[-1] > dea.iloc[-1])
 
 
+def recent_golden_cross(dif: pd.Series, dea: pd.Series, lookback: int = 3) -> bool:
+    """最近 lookback 根 K 线内是否出现过金叉（DIF 上穿 DEA）。
+
+    解决午后扫描（13:00+）时，上一根已收盘 K 线（12:00-13:00）产生的金叉
+    因当前正在形成的 K 线无交叉而漏检的问题。
+    例如 lookback=3：检查当前根和前两根，共 3 根 K 线。
+    """
+    n = min(lookback, len(dif))
+    if n < 2:
+        return False
+    for i in range(len(dif) - 1, len(dif) - 1 - n, -1):
+        if pd.isna(dif.iloc[i]) or pd.isna(dif.iloc[i - 1]):
+            continue
+        if pd.isna(dea.iloc[i]) or pd.isna(dea.iloc[i - 1]):
+            continue
+        if dif.iloc[i - 1] <= dea.iloc[i - 1] and dif.iloc[i] > dea.iloc[i]:
+            return True
+    return False
+
+
 def is_death_cross(dif: pd.Series, dea: pd.Series) -> bool:
     """最近一根 K 线是否死叉（DIF 下穿 DEA）。"""
     if len(dif) < 2 or pd.isna(dif.iloc[-2]) or pd.isna(dif.iloc[-1]):

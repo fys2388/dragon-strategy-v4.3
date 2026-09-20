@@ -22,7 +22,8 @@ from .trading_calendar import now_bjt
 
 from .macd_indicator import (above_zero_axis, below_zero_axis, calc_macd,
                              check_bullish_divergence, cross_above_zero,
-                             is_death_cross, is_golden_cross, red_bar_expanding)
+                             is_death_cross, is_golden_cross, red_bar_expanding,
+                             recent_golden_cross)
 
 
 class SignalType(Enum):
@@ -96,10 +97,10 @@ class SignalEngine:
         status["daily_above_zero"] = bool(not df_d.empty and dif_d_last is not None and dif_d_last > -ZERO_AXIS_EPS)
 
         df_60, dif_60, dea_60, _ = self._tf_macd(code, "60m", 200)
-        status["tf60_golden"] = bool(not df_60.empty and is_golden_cross(dif_60, dea_60))
+        status["tf60_golden"] = bool(not df_60.empty and recent_golden_cross(dif_60, dea_60, lookback=3))
 
         df_30, dif_30, dea_30, _ = self._tf_macd(code, "30m", 200)
-        status["tf30_golden"] = bool(not df_30.empty and is_golden_cross(dif_30, dea_30))
+        status["tf30_golden"] = bool(not df_30.empty and recent_golden_cross(dif_30, dea_30, lookback=3))
 
         df_15, dif_15, _, _ = self._tf_macd(code, "15m", 200)
         status["tf15_cross_zero"] = bool(not df_15.empty and cross_above_zero(dif_15))
@@ -144,7 +145,10 @@ class SignalEngine:
         df_60, dif_60, dea_60, macd_60 = self._tf_macd(code, "60m", 200)
         if df_60.empty:
             return None
-        if not (is_golden_cross(dif_60, dea_60) and self._last(dif_60) and self._last(dif_60) > 0):
+        # ★ 使用 recent_golden_cross(lookback=3)：午后扫描时，上一根已收盘
+        #   60min K 线（如 12:00-13:00）产生的金叉不会因当前正在形成的 K 线
+        #   无交叉而漏检。lookback=3 覆盖最近 3 根 60min K 线（最多 3 小时前）。
+        if not (recent_golden_cross(dif_60, dea_60, lookback=3) and self._last(dif_60) and self._last(dif_60) > 0):
             return None
         if not red_bar_expanding(macd_60):
             return None
@@ -154,7 +158,8 @@ class SignalEngine:
         df_30, dif_30, dea_30, _ = self._tf_macd(code, "30m", 200)
         if df_30.empty:
             return None
-        if not is_golden_cross(dif_30, dea_30):
+        # ★ 同 60min：使用 recent_golden_cross 避免午后扫描漏检
+        if not recent_golden_cross(dif_30, dea_30, lookback=3):
             return None
         if mode_cfg["tf30_require_dif_above_zero"]:
             if not (self._last(dif_30) and self._last(dif_30) > 0):
@@ -167,7 +172,8 @@ class SignalEngine:
         df_15, dif_15, dea_15, _ = self._tf_macd(code, "15m", 200)
         if df_15.empty:
             return None
-        if not is_golden_cross(dif_15, dea_15):
+        # ★ 同 60min/30min：使用 recent_golden_cross 避免午后扫描漏检
+        if not recent_golden_cross(dif_15, dea_15, lookback=3):
             return None
         if mode_cfg["tf15_require_cross_zero"]:
             if not cross_above_zero(dif_15):

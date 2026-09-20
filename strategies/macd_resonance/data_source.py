@@ -173,89 +173,102 @@ def _market_symbol(code: str) -> str:
 
 
 def _get_kline_sina(code: str, period: str = "daily", count: int = 200) -> pd.DataFrame:
-    """备用K线源1：新浪财经（日线/60m/30m/15m）。"""
+    """备用K线源1：新浪财经（日线/60m/30m/15m）。
+
+    带重试：云端环境偶发 Read timed out（8s），重试 1 次、间隔 2s、超时放宽到 12s。
+    """
     scale = {"daily": 240, "60m": 60, "30m": 30, "15m": 15}.get(period)
     if scale is None:
         return pd.DataFrame()
     url = "https://quotes.sina.cn/cn/api/json_v2.php/CN_MarketData.getKLineData"
     params = {"symbol": _market_symbol(code), "scale": scale, "ma": "no", "datalen": count}
-    try:
-        resp = requests.get(url, params=params, timeout=8,
-                            headers={"User-Agent": "Mozilla/5.0", "Referer": "https://finance.sina.com.cn/"})
-        if resp.status_code != 200:
+    headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://finance.sina.com.cn/"}
+    for attempt in range(2):
+        try:
+            resp = requests.get(url, params=params, timeout=12, headers=headers)
+            if resp.status_code != 200:
+                return pd.DataFrame()
+            rows = resp.json()
+            if not rows:
+                return pd.DataFrame()
+            df = pd.DataFrame([{
+                "datetime": r["day"],
+                "open": float(r["open"]),
+                "close": float(r["close"]),
+                "high": float(r["high"]),
+                "low": float(r["low"]),
+                "volume": float(r.get("volume", 0) or 0),
+                "amount": float(r.get("amount", 0) or 0),
+            } for r in rows])
+            df["datetime"] = pd.to_datetime(df["datetime"])
+            return df
+        except Exception as e:
+            if attempt < 1:
+                time.sleep(2)
+                continue
+            print(f"[data_source] 新浪K线失败({code}/{period}): {e}")
             return pd.DataFrame()
-        rows = resp.json()
-        if not rows:
-            return pd.DataFrame()
-        df = pd.DataFrame([{
-            "datetime": r["day"],
-            "open": float(r["open"]),
-            "close": float(r["close"]),
-            "high": float(r["high"]),
-            "low": float(r["low"]),
-            "volume": float(r.get("volume", 0) or 0),
-            "amount": float(r.get("amount", 0) or 0),
-        } for r in rows])
-        df["datetime"] = pd.to_datetime(df["datetime"])
-        return df
-    except Exception as e:
-        print(f"[data_source] 新浪K线失败({code}/{period}): {e}")
-        return pd.DataFrame()
 
 
 def _get_kline_tencent(code: str, period: str = "daily", count: int = 200) -> pd.DataFrame:
-    """备用K线源2：腾讯财经（day/60m/30m/15m）。"""
+    """备用K线源2：腾讯财经（day/60m/30m/15m）。
+
+    带重试：同新浪，云端环境偶发超时，重试 1 次、间隔 2s、超时放宽到 12s。
+    """
     freq = {"daily": "day", "60m": "60m", "30m": "30m", "15m": "15m"}.get(period)
     if freq is None:
         return pd.DataFrame()
     url = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
     params = {"param": f"{_market_symbol(code)},{freq},,,{count},qfq"}
-    try:
-        resp = requests.get(url, params=params, timeout=8,
-                            headers={"User-Agent": "Mozilla/5.0"})
-        if resp.status_code != 200:
-            return pd.DataFrame()
-        data = resp.json()
-        node = (data.get("data") or {}).get(_market_symbol(code)) or {}
-        klines = node.get(freq) or node.get("qfq" + freq) or []
-        if not klines:
-            return pd.DataFrame()
-        rows = []
-        for p in klines:
-            if len(p) < 6:
+    for attempt in range(2):
+        try:
+            resp = requests.get(url, params=params, timeout=12,
+                                headers={"User-Agent": "Mozilla/5.0"})
+            if resp.status_code != 200:
+                return pd.DataFrame()
+            data = resp.json()
+            node = (data.get("data") or {}).get(_market_symbol(code)) or {}
+            klines = node.get(freq) or node.get("qfq" + freq) or []
+            if not klines:
+                return pd.DataFrame()
+            rows = []
+            for p in klines:
+                if len(p) < 6:
+                    continue
+                try:
+                    amount = 0.0
+                    if len(p) > 6:
+                        a = p[6]
+                        if isinstance(a, (list, tuple)):
+                            a = a[0] if a else 0
+                        if isinstance(a, dict):
+                            a = a.get("amount", 0)
+                        try:
+                            amount = float(a)
+                        except (TypeError, ValueError):
+                            amount = 0.0
+                    rows.append({
+                        "datetime": p[0],
+                        "open": float(p[1]),
+                        "close": float(p[2]),
+                        "high": float(p[3]),
+                        "low": float(p[4]),
+                        "volume": float(p[5]),
+                        "amount": amount,
+                    })
+                except (ValueError, IndexError, TypeError):
+                    continue
+            if not rows:
+                return pd.DataFrame()
+            df = pd.DataFrame(rows)
+            df["datetime"] = pd.to_datetime(df["datetime"])
+            return df
+        except Exception as e:
+            if attempt < 1:
+                time.sleep(2)
                 continue
-            try:
-                # 腾讯 qfq 格式第 7 位可能是复权信息 dict/list，安全提取 amount
-                amount = 0.0
-                if len(p) > 6:
-                    a = p[6]
-                    if isinstance(a, (list, tuple)):
-                        a = a[0] if a else 0
-                    if isinstance(a, dict):
-                        a = a.get("amount", 0)
-                    try:
-                        amount = float(a)
-                    except (TypeError, ValueError):
-                        amount = 0.0
-                rows.append({
-                    "datetime": p[0],
-                    "open": float(p[1]),
-                    "close": float(p[2]),
-                    "high": float(p[3]),
-                    "low": float(p[4]),
-                    "volume": float(p[5]),
-                    "amount": amount,
-                })
-            except (ValueError, IndexError, TypeError):
-                continue
-        if not rows:
+            print(f"[data_source] 腾讯K线失败({code}/{period}): {e}")
             return pd.DataFrame()
-        df = pd.DataFrame(rows)
-        df["datetime"] = pd.to_datetime(df["datetime"])
-        return df
-    except Exception as e:
-        print(f"[data_source] 腾讯K线失败({code}/{period}): {e}")
-        return pd.DataFrame()
 
 
 def get_kline(code: str, period: str = "daily", count: int = 200, is_index: bool = False) -> pd.DataFrame:

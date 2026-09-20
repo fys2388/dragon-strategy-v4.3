@@ -9,6 +9,13 @@
 name: V1.0 MACD多周期共振策略云推送
 run-name: "云端策略推送 @ ${{ github.actor }}"
 
+# ★ 必须授予 contents: write：学习数据回传步骤需要 git push，
+#   否则 data/system_health.json 等文件被暂存后 push 返回 403 →
+#   workflow 变红（已修复推送失败被吞的问题后，红点会正确报警）。
+permissions:
+  contents: write
+  actions: read
+
 on:
   # schedule 已禁用：GitHub Actions cron 严重延迟（5-12小时），交易时段的推送被拖到半夜执行。
   # 改由外部可靠调度器（Cloudflare Worker Cron / 扣子定时触发）调用 workflow_dispatch。
@@ -48,7 +55,7 @@ jobs:
       - name: 安装依赖
         run: |
           python -m pip install --upgrade pip
-          pip install requests pandas numpy akshare
+          pip install requests pandas numpy akshare scikit-learn
 
       - name: 运行MACD多周期共振策略推送
         env:
