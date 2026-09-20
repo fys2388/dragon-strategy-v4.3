@@ -115,3 +115,27 @@ DATA_SOURCE = {
 
 # 东财 K 线周期参数
 KLT_MAP = {"daily": 101, "60m": 60, "30m": 30, "15m": 15}
+
+# ============================================================
+# LLM 智能分析配置（OpenAI 兼容接口，支持 DeepSeek / SenseNova / OpenAI 等）
+# ============================================================
+# API Key 通过环境变量 LLM_API_KEY 传入（GitHub Secrets），
+# 也可直接在 config/llm_config.json 中写入（本地调试用）。
+#
+# 可用 provider 对照：
+#   deepseek    → https://api.deepseek.com/v1         (免费 100 万 token)
+#   sensenova   → https://platform.sensenova.cn/v1     (商量平台，需确认 API 已开放)
+#   openai      → https://api.openai.com/v1            (付费)
+#   openrouter  → https://openrouter.ai/api/v1         (聚合平台，有免费模型)
+LLM = {
+    "enabled": True,               # 总开关：false 时完全跳过 LLM，纯规则降级
+    "provider": "deepseek",        # deepseek / sensenova / openai / openrouter / 自定义
+    "model": "deepseek-chat",      # deepseek-chat / sensenova-6.7-flash / gpt-4o-mini 等
+    "api_base": "https://api.deepseek.com/v1",  # OpenAI 兼容 API 地址
+    "timeout": 15,                  # 请求超时（秒）
+    "max_tokens": 500,              # 单次回复最大 token
+    "temperature": 0.3,             # 低温度=更稳定，分析类建议 0.3
+    "retry": 1,                     # 失败重试次数
+    "fallback_to_rules": True,     # LLM 失败时自动降级到规则方案
+    "batch_delay_s": 0.3,           # 批量调用间隔（秒），防限流
+}

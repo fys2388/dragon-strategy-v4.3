@@ -17,7 +17,10 @@ import os
 import time
 from typing import Dict, List, Optional, Any
 
+import requests
+
 from . import data_source as ds
+from .config import LLM
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CACHE_FILE = os.path.join(BASE_DIR, "data", "stock_analysis_cache.json")
@@ -101,22 +104,143 @@ class StockAnalyzer:
         except Exception:
             pass
 
+    # ============================================================
+    # LLM 调用（OpenAI 兼容接口）
+    # ============================================================
+
+    def _call_llm(self, prompt: str) -> str:
+        """调用 LLM API，返回文本回复。失败返回空字符串。"""
+        if not LLM.get("enabled", False):
+            return ""
+        api_key = os.environ.get("LLM_API_KEY", "")
+        if not api_key:
+            # 尝试从本地配置文件读取（仅本地调试用）
+            local_config = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                "config", "llm_config.json",
+            )
+            if os.path.exists(local_config):
+                try:
+                    with open(local_config, "r", encoding="utf-8") as f:
+                        api_key = json.load(f).get("api_key", "")
+                except Exception:
+                    pass
+            if not api_key:
+                print("[LLM] 未配置 LLM_API_KEY，跳过 LLM 分析")
+                return ""
+
+        api_base = LLM.get("api_base", "https://platform.sensenova.cn/v1")
+        model = LLM.get("model", "sensenova-6.7-flash")
+        timeout = LLM.get("timeout", 15)
+        max_tokens = LLM.get("max_tokens", 500)
+        temperature = LLM.get("temperature", 0.3)
+        retry = LLM.get("retry", 1)
+
+        for attempt in range(retry + 1):
+            try:
+                resp = requests.post(
+                    f"{api_base}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": model,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "max_tokens": max_tokens,
+                        "temperature": temperature,
+                    },
+                    timeout=timeout,
+                )
+                if resp.status_code != 200:
+                    print(f"[LLM] API 返回 {resp.status_code}: {resp.text[:200]}")
+                    if attempt < retry:
+                        time.sleep(2)
+                        continue
+                    return ""
+                data = resp.json()
+                content = data["choices"][0]["message"]["content"]
+                return content.strip()
+            except Exception as e:
+                if attempt < retry:
+                    time.sleep(2)
+                    continue
+                print(f"[LLM] 调用失败: {e}")
+                return ""
+
+    def _build_analysis_prompt(self, code: str, name: str, price: float) -> str:
+        """构建分析 prompt。"""
+        industry = self._infer_industry(name)
+        return f"""你是A股量化分析师。请分析以下股票，用 JSON 格式回复（不要加其他文字）：
+
+股票：{name}({code})
+现价：{price}元
+行业：{industry}
+
+请输出：
+{{
+  "推荐理由": "1-2句话核心推荐逻辑",
+  "风险提示": "1句话主要风险点",
+  "仓位建议": "X%试仓 / X%观察 / 不建议",
+  "目标价": 数字（元），
+  "止损价": 数字（元）
+}}
+"""
+
+    def _analyze_with_llm(self, code: str, name: str, price: float) -> Optional[Dict[str, Any]]:
+        """用 LLM 分析股票，失败返回 None（调用方降级到规则方案）。"""
+        prompt = self._build_analysis_prompt(code, name, price)
+        result = self._call_llm(prompt)
+        if not result:
+            return None
+        try:
+            # LLM 可能返回带 markdown 代码块的 JSON，需要清理
+            text = result.strip()
+            if text.startswith("```"):
+                text = text.split("```")[1]
+                if text.startswith("json"):
+                    text = text[4:]
+                text = text.strip()
+            return json.loads(text)
+        except (json.JSONDecodeError, IndexError) as e:
+            print(f"[LLM] {name}({code}) JSON 解析失败: {e}，降级到规则方案")
+            return None
+
     def analyze_stock(self, code: str, name: str, price: float = 0) -> Dict[str, Any]:
-        """分析单只股票，返回完整分析结果。"""
+        """分析单只股票，返回完整分析结果。
+
+        优先级：LLM 智能分析 → 规则降级方案。
+        """
         cache_key = f"{code}_{time.strftime('%Y%m%d')}"
         if cache_key in self.cache:
             return self.cache[cache_key]
 
-        result = {
-            "code": code,
-            "name": name,
-            "price": price,
-            "fundamental": self._analyze_fundamental(code, name, price),
-            "themes": self._mine_themes(code, name),
-            "risks": self._scan_risks(code, name, price),
-            "interpretation": "",
-        }
-        result["interpretation"] = self._generate_interpretation(result)
+        # 1. 尝试 LLM 智能分析
+        llm_result = self._analyze_with_llm(code, name, price)
+        if llm_result and LLM.get("enabled", False):
+            print(f"[LLM] ✅ {name}({code}) LLM 分析成功")
+            result = {
+                "code": code,
+                "name": name,
+                "price": price,
+                "fundamental": llm_result,
+                "themes": self._mine_themes(code, name),
+                "risks": self._scan_risks(code, name, price),
+                "interpretation": f"{llm_result.get('推荐理由', '')} | 风险：{llm_result.get('风险提示', '')} | 仓位：{llm_result.get('仓位建议', '')}",
+                "analysis_source": "llm",
+            }
+        else:
+            # 2. LLM 不可用或失败 → 降级到规则方案
+            result = {
+                "code": code,
+                "name": name,
+                "price": price,
+                "fundamental": self._analyze_fundamental(code, name, price),
+                "themes": self._mine_themes(code, name),
+                "risks": self._scan_risks(code, name, price),
+                "analysis_source": "rules",
+            }
+            result["interpretation"] = self._generate_interpretation(result)
 
         self.cache[cache_key] = result
         self._save_cache()
