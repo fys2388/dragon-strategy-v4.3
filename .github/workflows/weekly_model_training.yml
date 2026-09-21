@@ -42,6 +42,23 @@ jobs:
         run: |
           python scripts/weekly_model_training.py
 
+      - name: 提交模型文件到仓库
+        # ★ 关键：训练出的模型此前只上传为 artifact，从不进仓库。
+        #   而 v43_push 跑在另一个工作流（strategy_cloud_deploy.yml）的全新 checkout 里，
+        #   artifact 对它不可见 → data/models/lgbm_model.pkl 在推送环境中永远不存在 →
+        #   AIScorer 永远走 _rule_based_predict（规则打分伪装成概率）。
+        #   这里把模型提交进仓库，下次推送才能加载真实模型。
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          if [ -d data/models ] && [ "$(ls -A data/models 2>/dev/null)" ]; then
+            git add data/models/
+            git diff --staged --quiet || git commit -m "chore: 每周自动提交训练好的模型（AI打分从规则降级切换为真实模型）"
+            git push || echo "无更新或推送失败"
+          else
+            echo "无模型产物，跳过提交（data/models 为空，本次训练未产出模型）"
+          fi
+
       - name: 上传模型文件
         uses: actions/upload-artifact@v4
         with:

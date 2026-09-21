@@ -88,12 +88,15 @@ def _write_anomaly_log(line: str):
 class Scanner:
     """MACD 多周期共振主扫描器。"""
 
-    def __init__(self, engine: Optional[SignalEngine] = None):
+    def __init__(self, engine: Optional[SignalEngine] = None, use_full_market: bool = False):
         self.engine = engine or SignalEngine()
         self.base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         self.cache_file = os.path.join(self.base_dir, "data", "signal_cache.json")
         self.cache = self._load_cache()
         self.quality_pool = self._load_quality_pool()
+        # 全市场开关：health_monitor Level 3 降级时置 True，
+        # 让 _quick_filter 跳过优质股票池限制（否则降级等于空转）。
+        self.use_full_market = use_full_market
 
     def _load_quality_pool(self) -> set:
         pool_file = os.path.join(self.base_dir, "data", "quality_pool.json")
@@ -141,11 +144,20 @@ class Scanner:
     # 策略历史记录（供复盘/看板使用）
     # ----------------------------------------------------------
     def _append_history(self, result: Dict):
-        """将一次扫描结果追加到 data/strategy_history.jsonl。"""
+        """将一次扫描结果追加到 data/strategy_history.jsonl。
+
+        供 scripts/daily_review_push.py、generate_dashboard_data.py、morning_noon_push.py 读取。
+        补记 regime / degradation_level：复盘与看板需要按市场环境和降级档位切片，
+        否则只能看到"推了几只"，看不出"是什么环境下、是否处于降级放宽状态推的"。
+        """
         record = {
             "ts": result.get("scan_time") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "strategy": "resonance",
+            "regime": result.get("regime", ""),
             "market_score": result.get("market_score", 0.0),
             "can_open": result.get("can_open", False),
+            "degradation_level": result.get("degradation_level", 0),
+            "recommend_count": len(result.get("entries", [])),
             "summary": result.get("summary", ""),
             "entries": [
                 {"code": e.get("code"), "name": e.get("name"),
@@ -198,9 +210,9 @@ class Scanner:
         name = str(stock.get("name", ""))
         if "ST" in name.upper() or "退" in name:
             return False
-        # 优质股票池过滤（基本面预筛选）
+        # 优质股票池过滤（基本面预筛选）；Level 3 降级时退回全市场
         code = str(stock.get("code", ""))
-        if self.quality_pool and code not in self.quality_pool:
+        if self.quality_pool and not self.use_full_market and code not in self.quality_pool:
             return False
         price = float(stock.get("price", 0) or 0)
         cap = float(stock.get("float_cap_yi", 0) or 0)
@@ -239,14 +251,18 @@ class Scanner:
     # 主扫描
     # ----------------------------------------------------------
     def run(self, max_stocks: int = 2000, need_push: bool = False,
-            source: str = "auto") -> Dict:
+            source: str = "auto", param_override: Optional[Dict] = None) -> Dict:
         """执行扫描。
 
-        Returns:
-            {
-              scan_time, market_score, market_desc, can_open,
-              entries, avoids, errors, summary, diagnosis,
-            }
+        Args:
+            max_stocks: 标的池上限
+            need_push: 是否标记已推送（进入冷却期）
+            source: 数据源选择 auto/eastmoney/akshare/sina
+            param_override: health_monitor.get_current_params_override() 的返回值。
+                传入后其中的 ``macd`` 覆盖会合并进 adaptive_params、
+                ``general.use_full_market`` 会打开全市场扫描。
+                之前该覆盖只在 v43_push.py 里 print 出来、从未真正作用于扫描，
+                是 Agent 闭环里最典型的一段"假闭环"。
         """
         result = {
             "scan_time": now_bjt().strftime("%Y-%m-%d %H:%M:%S"),
@@ -368,6 +384,22 @@ class Scanner:
         regime = get_current_regime(chosen_md)
         adaptive_params = get_macd_params(regime)
         risk_params = get_risk_params(regime)
+
+        # 1.6 健康度降级覆盖：真正生效（原先只在 v43_push.py 打印，从未作用于扫描）
+        if param_override:
+            from .health_monitor import HealthMonitor
+            adaptive_params = HealthMonitor.merge_override(adaptive_params, "macd", param_override)
+            self.use_full_market = bool(
+                param_override.get("general", {}).get("use_full_market", False)
+            )
+        result["degradation_level"] = int(param_override.get("level", 0)) if param_override else 0
+        if param_override and result["degradation_level"] > 0:
+            result["health_override"] = param_override
+            LOG.warning(f"[健康度降级] Level {result['degradation_level']}："
+                        f"{param_override.get('general', {}).get('note', '')}"
+                        f" | 全市场={self.use_full_market} | "
+                        f"共振门槛={adaptive_params.get('min_score')}")
+
         result["regime"] = regime
         result["regime_label"] = REGIME_LABELS.get(regime, "未知")
         result["adaptive_params"] = adaptive_params
@@ -375,7 +407,7 @@ class Scanner:
         LOG.info(f"[自适应] 市场环境={regime}({result['regime_label']}) "
                  f"参数={adaptive_params['name']} "
                  f"振幅上限={adaptive_params.get('amplitude_20d_max', 40)}% "
-                 f"最低得分={adaptive_params.get('min_score', 60)}")
+                 f"最低得分={adaptive_params.get('min_score', 2.0)}")
         if not can_open:
             result["summary"] = f"大盘评分 {score:.1f} 分 < 4，仅允许平仓/空仓，禁止新开多。"
             LOG.info(result["summary"])

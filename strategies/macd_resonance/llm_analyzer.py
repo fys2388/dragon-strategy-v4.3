@@ -38,7 +38,7 @@ THEME_KEYWORDS = {
     "军工": ["军工", "航天", "航空", "兵器", "船舶", "中船", "中航", "航发", "光电"],
     "汽车": ["汽车", "整车", "零部件", "轮胎", "上汽", "广汽", "长城", "比亚迪", "长安", "福耀"],
     "房地产": ["地产", "置业", "建设", "万科", "保利", "招商蛇口", "金地", "新城"],
-    "金融": ["银行", "证券", "保险", "信托", "中信", "招商", "平安", "兴业"],
+    "金融": ["银行", "证券", "保险", "信托", "中信", "招商", "平安", "兴业", "资本"],
     "农业": ["农业", "种业", "养殖", "饲料", "牧原", "温氏", "新希望", "海大"],
     "化工": ["化工", "化学", "材料", "万华", "荣盛", "恒力", "桐昆"],
     "传媒": ["传媒", "游戏", "影视", "出版", "三七", "完美", "芒果", "分众"],
@@ -52,7 +52,7 @@ THEME_KEYWORDS = {
 # 行业关键词（用于从名称推断行业）
 INDUSTRY_KEYWORDS = {
     "银行": ["银行"],
-    "证券": ["证券", "券商"],
+    "证券": ["证券", "券商", "资本"],
     "保险": ["保险", "人寿", "平安"],
     "房地产": ["地产", "置业", "建设", "城建"],
     "医药": ["医药", "生物", "制药", "医疗", "健康"],
@@ -74,7 +74,7 @@ INDUSTRY_KEYWORDS = {
     "轻工制造": ["造纸", "包装", "家具"],
     "商贸零售": ["商业", "零售", "百货", "超市"],
     "社会服务": ["旅游", "酒店", "餐饮", "教育"],
-    "传媒": ["传媒", "文化", "影视", "游戏", "出版"],
+    "传媒": ["传媒", "文化", "影视", "游戏", "出版", "新华", "文轩"],
     "通信": ["通信", "通讯", "电信"],
     "国防军工": ["军工", "航天", "航空", "兵器", "船舶"],
     "美容护理": ["美妆", "护理", "日化"],
@@ -168,15 +168,29 @@ class StockAnalyzer:
                 print(f"[LLM] 调用失败: {e}")
                 return ""
 
-    def _build_analysis_prompt(self, code: str, name: str, price: float) -> str:
+    def _build_analysis_prompt(self, code: str, name: str, price: float,
+                                huangyang_score: Optional[int] = None) -> str:
         """构建分析 prompt。"""
         industry = self._infer_industry(name)
+        # 如果已有黄阳打分，将分数传入prompt，让LLM基于分数评级而非自行判断
+        score_section = ""
+        if huangyang_score is not None:
+            score_section = f"""
+基本面打分：{huangyang_score}分
+评级标准（必须严格遵循）：
+- ≥80分 = 优秀
+- ≥65分 = 良好
+- ≥50分 = 一般
+- ≥35分 = 偏弱
+- <35分 = 差
+请在分析中引用该分数和对应评级，不要自行重新判断评级。
+"""
         return f"""你是A股量化分析师。请分析以下股票，用 JSON 格式回复（不要加其他文字）：
 
 股票：{name}({code})
 现价：{price}元
 行业：{industry}
-
+{score_section}
 请输出：
 {{
   "推荐理由": "1-2句话核心推荐逻辑",
@@ -187,9 +201,10 @@ class StockAnalyzer:
 }}
 """
 
-    def _analyze_with_llm(self, code: str, name: str, price: float) -> Optional[Dict[str, Any]]:
+    def _analyze_with_llm(self, code: str, name: str, price: float,
+                           huangyang_score: Optional[int] = None) -> Optional[Dict[str, Any]]:
         """用 LLM 分析股票，失败返回 None（调用方降级到规则方案）。"""
-        prompt = self._build_analysis_prompt(code, name, price)
+        prompt = self._build_analysis_prompt(code, name, price, huangyang_score)
         result = self._call_llm(prompt)
         if not result:
             return None
@@ -206,19 +221,75 @@ class StockAnalyzer:
             print(f"[LLM] {name}({code}) JSON 解析失败: {e}，降级到规则方案")
             return None
 
-    def analyze_stock(self, code: str, name: str, price: float = 0) -> Dict[str, Any]:
+    def _build_llm_interpretation(self, llm_result: Dict[str, Any],
+                                   huangyang_score: Optional[int],
+                                   name: str) -> str:
+        """构建LLM分析解读文本，用黄阳打分统一评级口径。"""
+        parts = []
+
+        # 用黄阳打分统一评级（与 huangyang_scorer 阈值一致）
+        if huangyang_score is not None:
+            if huangyang_score >= 80:
+                parts.append(f"基本面优秀（评分{huangyang_score}分）")
+            elif huangyang_score >= 65:
+                parts.append(f"基本面良好（评分{huangyang_score}分）")
+            elif huangyang_score >= 50:
+                parts.append(f"基本面一般（评分{huangyang_score}分）")
+            elif huangyang_score >= 35:
+                parts.append(f"基本面偏弱（评分{huangyang_score}分），需谨慎")
+            else:
+                parts.append(f"基本面较差（评分{huangyang_score}分），不建议参与")
+        else:
+            industry = self._infer_industry(name)
+            parts.append(f"行业：{industry}")
+
+        # LLM 核心分析
+        reason = llm_result.get("推荐理由", "")
+        if reason:
+            parts.append(reason)
+
+        # 风险
+        risk = llm_result.get("风险提示", "")
+        if risk:
+            parts.append(f"风险：{risk}")
+
+        # 仓位
+        position = llm_result.get("仓位建议", "")
+        if position:
+            parts.append(f"建议：{position}")
+
+        # 目标价和止损价
+        target = llm_result.get("目标价", None)
+        stop = llm_result.get("止损价", None)
+        tp_parts = []
+        if target:
+            tp_parts.append(f"目标{target}元")
+        if stop:
+            tp_parts.append(f"止损{stop}元")
+        if tp_parts:
+            parts.append(" | ".join(tp_parts))
+
+        return "；".join(parts)
+
+    def analyze_stock(self, code: str, name: str, price: float = 0,
+                      huangyang_score: Optional[int] = None) -> Dict[str, Any]:
         """分析单只股票，返回完整分析结果。
 
         优先级：LLM 智能分析 → 规则降级方案。
+        huangyang_score: 黄阳五维打分（可选），用于统一评级口径。
         """
         cache_key = f"{code}_{time.strftime('%Y%m%d')}"
         if cache_key in self.cache:
             return self.cache[cache_key]
 
         # 1. 尝试 LLM 智能分析
-        llm_result = self._analyze_with_llm(code, name, price)
+        llm_result = self._analyze_with_llm(code, name, price, huangyang_score)
         if llm_result and LLM.get("enabled", False):
             print(f"[LLM] ✅ {name}({code}) LLM 分析成功")
+            # 用黄阳打分统一评级，避免LLM幻觉
+            interpretation = self._build_llm_interpretation(
+                llm_result, huangyang_score, name
+            )
             result = {
                 "code": code,
                 "name": name,
@@ -226,7 +297,7 @@ class StockAnalyzer:
                 "fundamental": llm_result,
                 "themes": self._mine_themes(code, name),
                 "risks": self._scan_risks(code, name, price),
-                "interpretation": f"{llm_result.get('推荐理由', '')} | 风险：{llm_result.get('风险提示', '')} | 仓位：{llm_result.get('仓位建议', '')}",
+                "interpretation": interpretation,
                 "analysis_source": "llm",
             }
         else:
@@ -255,6 +326,7 @@ class StockAnalyzer:
                     e.get("code", ""),
                     e.get("name", ""),
                     float(e.get("price", 0) or 0),
+                    huangyang_score=e.get("huangyang_score"),
                 )
                 e["analysis"] = analysis
                 results.append(e)
@@ -413,17 +485,19 @@ class StockAnalyzer:
 
         parts = []
 
-        # 基本面解读
+        # 基本面解读（阈值与 huangyang_scorer 一致：≥80优秀/≥65良好/≥50一般/≥35偏弱）
         score = fundamental.get("score", 50)
         industry = fundamental.get("industry", "未知")
-        if score >= 70:
+        if score >= 80:
             parts.append(f"基本面优秀（评分{score}分），{industry}赛道")
-        elif score >= 55:
+        elif score >= 65:
             parts.append(f"基本面良好（评分{score}分），{industry}行业")
-        elif score >= 40:
+        elif score >= 50:
             parts.append(f"基本面一般（评分{score}分），{industry}行业")
-        else:
+        elif score >= 35:
             parts.append(f"基本面偏弱（评分{score}分），需谨慎")
+        else:
+            parts.append(f"基本面较差（评分{score}分），不建议参与")
 
         if fundamental.get("summary"):
             parts.append(fundamental["summary"])
@@ -446,19 +520,28 @@ def build_analysis_message(entries: List[Dict]) -> str:
         return ""
 
     lines = ["", "🧠 智能分析："]
+    has_llm = False
     for e in entries:
         analysis = e.get("analysis")
-        if not analysis:
-            continue
         name = e.get("name", "")
         code = e.get("code", "")
-        interpretation = analysis.get("interpretation", "")
-        themes = analysis.get("themes", [])
+        if not analysis:
+            lines.append(f"  {name}({code})：⚠️ 智能分析未获取")
+            continue
+        has_llm = True
+        source = analysis.get("analysis_source", "rules")
+        if source == "llm":
+            interpretation = analysis.get("interpretation", "")
+            lines.append(f"  {name}({code})：{interpretation}")
+        else:
+            interpretation = analysis.get("interpretation", "")
+            lines.append(f"  {name}({code})：{interpretation}")
         risks = analysis.get("risks", [])
-
-        lines.append(f"  {name}({code})：{interpretation}")
         if risks:
             risk_text = "、".join([f"{r['type']}({r['level']})" for r in risks[:2]])
             lines.append(f"    ⚠️ 风险：{risk_text}")
+
+    if not has_llm and lines[-1].strip() != "🧠 智能分析：":
+        lines.append("  （以上为规则降级分析，非LLM智能分析）")
 
     return "\n".join(lines)

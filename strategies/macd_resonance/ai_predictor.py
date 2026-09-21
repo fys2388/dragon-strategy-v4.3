@@ -184,10 +184,15 @@ class AIPredictor:
         return self.meta
 
     def predict(self, stock_code: str) -> Dict[str, Any]:
-        """预测单只股票未来5日上涨概率。
+        """预测单只股票。
+
+        有训练好的 LightGBM 模型时返回真实概率（``score_basis="model"``）；
+        没有模型时返回规则打分（``score_basis="rule_based"``，见
+        :meth:`_rule_based_predict`）。**下游不要无条件把 probability 当成概率**，
+        先看 ``score_basis`` / ``probability_is_actual_model``。
 
         Returns:
-            {probability, prediction, features, model_used}
+            {probability, probability_is_actual_model, score_basis, prediction, model_used, ...}
         """
         from .feature_engineering import build_features, get_feature_names
         from . import data_source as ds
@@ -195,11 +200,15 @@ class AIPredictor:
         try:
             df = ds.get_kline_daily(stock_code, count=60)
             if df.empty or len(df) < 30:
-                return {"probability": 0.5, "prediction": 0, "model_used": "no_data"}
+                return {"probability": 0.5, "probability_is_actual_model": False,
+                        "score_basis": "rule_based", "rule_score": 50,
+                        "prediction": 0, "model_used": "no_data"}
 
             features = build_features(df)
             if features.empty:
-                return {"probability": 0.5, "prediction": 0, "model_used": "no_features"}
+                return {"probability": 0.5, "probability_is_actual_model": False,
+                        "score_basis": "rule_based", "rule_score": 50,
+                        "prediction": 0, "model_used": "no_features"}
 
             # 取最后一行（最新数据）
             latest_features = features.iloc[[-1]].dropna(axis=1)
@@ -218,54 +227,83 @@ class AIPredictor:
                 prob = float(self.model.predict(X_pred)[0])
                 return {
                     "probability": round(prob, 4),
+                    "probability_is_actual_model": True,
+                    "score_basis": "model",
+                    "rule_score": round(prob * 100, 1),  # 统一量纲，便于与规则打分排序
                     "prediction": 1 if prob > 0.5 else 0,
                     "model_used": "lightgbm",
                     "features_used": len(available_features),
                 }
             else:
-                # 降级方案：规则打分
+                # 降级方案：规则打分（不是概率）
                 return self._rule_based_predict(latest_features.iloc[0])
 
         except Exception as e:
             print(f"[AI模型] {stock_code} 预测失败: {e}")
-            return {"probability": 0.5, "prediction": 0, "model_used": "error", "error": str(e)}
+            return {"probability": 0.5, "probability_is_actual_model": False,
+                    "score_basis": "error", "rule_score": 50,
+                    "prediction": 0, "model_used": "error", "error": str(e)}
 
     def _rule_based_predict(self, features: pd.Series) -> Dict[str, Any]:
-        """规则打分降级方案（无LightGBM时使用）。"""
+        """规则打分降级方案（无 LightGBM 时使用）。
+
+        ⚠️ 命名口径（重要，别再把它当成概率）：
+        这里给的是 **rule_score（0~100 的规则加分）**，不是模型概率。
+        原实现直接把它除以 100 塞进 ``probability`` 字段，下游推送文案又写成
+        "上涨概率 XX%"，等于给规则打分贴了概率标签——用户会以为有模型在预测。
+        现在主字段是 ``rule_score`` + ``score_basis="rule_based"``，
+        ``probability`` 保留只为向后兼容（老代码读它），并显式标注
+        ``probability_is_actual_model=False``。
+        """
+        hits = []
+
         score = 50  # 基础分50
 
         # MACD金叉 +10
         if features.get("macd_golden_cross", 0) == 1:
             score += 10
+            hits.append("MACD金叉+10")
         # MACD在零轴上方 +5
         if features.get("macd_above_zero", 0) == 1:
             score += 5
+            hits.append("MACD零轴上方+5")
         # 均线多头 +10
         if features.get("ma_bullish", 0) == 1:
             score += 10
+            hits.append("均线多头+10")
         # RSI在30-70之间（不超买超卖）+5
         rsi = features.get("rsi_6", 50)
         if 30 < rsi < 70:
             score += 5
+            hits.append("RSI中性+5")
         # 突破20日新高 +10
         if features.get("new_high_20d", 0) == 1:
             score += 10
+            hits.append("突破20日新高+10")
         # 放量 +5
         if features.get("volume_ratio_5d", 1) > 1.5:
             score += 5
+            hits.append("放量+5")
         # 5日涨幅为正 +5
         if features.get("return_5d", 0) > 0:
             score += 5
+            hits.append("5日涨幅为正+5")
         # 布林带中轨上方 +5
         if features.get("boll_position", 0.5) > 0.5:
             score += 5
+            hits.append("布林中轨上方+5")
 
-        prob = min(max(score / 100, 0), 1)
+        rule_score = max(0, min(score, 100))
+        prob = round(rule_score / 100, 4)
         return {
-            "probability": round(prob, 4),
+            "rule_score": rule_score,            # 主字段：规则打分，不是概率
+            "score_basis": "rule_based",         # 打分依据：规则（非模型）
+            "rule_hits": hits,                   # 命中了哪些规则，可解释
+            "probability": prob,                 # 兼容旧字段，非真实模型概率
+            "probability_is_actual_model": False,
             "prediction": 1 if prob > 0.5 else 0,
             "model_used": "rule_based",
-            "score": score,
+            "score": rule_score,                 # 旧字段别名
         }
 
     def batch_predict(self, stock_codes: List[str]) -> Dict[str, Dict]:
@@ -281,9 +319,15 @@ class AIPredictor:
         return results
 
     def get_model_info(self) -> Dict[str, Any]:
-        """获取模型信息。"""
+        """获取模型信息（如实标注是否真的有模型在预测）。"""
         if self.model is None:
-            return {"status": "no_model", "message": "未训练模型，使用规则打分"}
+            return {
+                "status": "no_model",
+                "model_trained": False,
+                "score_basis": "rule_based",
+                "message": "未训练模型（data/models/lgbm_model.pkl 不存在或无法加载），"
+                           "当前 AI 打分实为规则打分，不是模型概率",
+            }
         return {
             "status": "loaded",
             "trained_at": self.meta.get("trained_at"),

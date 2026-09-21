@@ -104,19 +104,43 @@ def _send_text(msg: str) -> bool:
     return ok
 
 
+# 最近一次打分器实例：add_ai_info_to_message 此前从未被调用，
+# 导致推送里根本看不到 AI/规则打分结果（只做了过滤，不显示分数）。
+_last_ai_scorer = None
+
+
 def ai_filter_entries(entries: list, strategy_type: str = "") -> list:
-    """用AI模型过滤候选股票，只保留上涨概率>55%的。
-    AI模型不可用时自动降级为原始推荐，不中断运行。
+    """用打分器过滤候选股票，只保留打分 ≥ 55（0~100）的。
+
+    有训练好的 LightGBM 模型时按模型概率过滤；没有模型时（当前状态）
+    按规则打分过滤，不是概率。打分器不可用时自动降级为原始推荐，不中断运行。
     """
+    global _last_ai_scorer
     if not entries:
         return entries
     try:
         scorer = init_ai_scorer(min_probability=0.55)
         scored = scorer.score_candidates(entries, strategy_type)
+        _last_ai_scorer = scorer
         return scored
     except Exception as e:
-        print(f"⚠️ AI打分失败，保留原始推荐: {e}")
+        print(f"⚠️ 打分失败，保留原始推荐: {e}")
         return entries
+
+
+def append_ai_score_block(msg: str, entries: list) -> str:
+    """把打分排序结果附加到推送消息末尾。
+
+    修复：原实现里 ``AIScorer.add_ai_info_to_message`` 没有任何调用方，
+    推送消息看不到打分结果，等于"过滤了但用户看不见为什么被过滤"。
+    """
+    if not entries or _last_ai_scorer is None:
+        return msg
+    try:
+        return _last_ai_scorer.add_ai_info_to_message(msg, entries)
+    except Exception as e:
+        print(f"⚠️ 打分信息附加失败: {e}")
+        return msg
 
 
 def add_multi_dimension_detail(entries: list) -> str:
@@ -231,17 +255,20 @@ def main():
         return
 
     # 健康度监控：检查连续0推荐，自动降级
+    # ★ param_override 现在会真正传入三个扫描器（此前只 print，从未作用于扫描）
     health = init_health_monitor()
     param_override = health.get_current_params_override()
     if param_override["level"] > 0:
-        print(f"⚠️ 系统处于降级状态 Level {param_override['level']}：{param_override['general'].get('note', '')}")
+        print(f"⚠️ 系统处于降级状态 Level {param_override['level']}："
+              f"{param_override['general'].get('note', '')}（已作用于三个扫描器）")
 
     scanner = Scanner()
     # 硬超时看门狗：数据源在云端异常挂起时，强制结束扫描，避免阻塞节奏
     result_box: dict = {}
 
     def _scan():
-        result_box["r"] = scanner.run(need_push=True, max_stocks=SCAN_MAX_STOCKS)
+        result_box["r"] = scanner.run(need_push=True, max_stocks=SCAN_MAX_STOCKS,
+                                      param_override=param_override)
 
     t = threading.Thread(target=_scan, daemon=True)
     t.start()
@@ -264,6 +291,7 @@ def main():
         multi_detail = add_multi_dimension_detail(resonance_entries)
         if multi_detail:
             msg = msg + "\n" + multi_detail
+    msg = append_ai_score_block(msg, resonance_entries)
     print(msg)
     print("\n[SUMMARY]", result["summary"])
 
@@ -285,7 +313,8 @@ def main():
         oversold_box: dict = {}
 
         def _oversold_scan():
-            oversold_box["r"] = oversold_scanner.run(need_push=True, max_stocks=SCAN_MAX_STOCKS)
+            oversold_box["r"] = oversold_scanner.run(need_push=True, max_stocks=SCAN_MAX_STOCKS,
+                                                     param_override=param_override)
 
         t2 = threading.Thread(target=_oversold_scan, daemon=True)
         t2.start()
@@ -299,6 +328,7 @@ def main():
         # AI打分过滤
         oversold_result["entries"] = ai_filter_entries(oversold_result.get("entries", []), "oversold")
         oversold_msg = build_oversold_message(oversold_result)
+        oversold_msg = append_ai_score_block(oversold_msg, oversold_result.get("entries", []))
         oversold_entries = oversold_result.get("entries", [])
         print(oversold_msg)
         print("\n[OVERSOLD SUMMARY]", oversold_result.get("summary", ""))
@@ -325,7 +355,8 @@ def main():
         breakout_box: dict = {}
 
         def _breakout_scan():
-            breakout_box["r"] = breakout_scanner.run(need_push=True, max_stocks=SCAN_MAX_STOCKS)
+            breakout_box["r"] = breakout_scanner.run(need_push=True, max_stocks=SCAN_MAX_STOCKS,
+                                                     param_override=param_override)
 
         t3 = threading.Thread(target=_breakout_scan, daemon=True)
         t3.start()
@@ -339,6 +370,7 @@ def main():
         # AI打分过滤
         breakout_result["entries"] = ai_filter_entries(breakout_result.get("entries", []), "breakout")
         breakout_msg = build_breakout_message(breakout_result)
+        breakout_msg = append_ai_score_block(breakout_msg, breakout_result.get("entries", []))
         breakout_entries = breakout_result.get("entries", [])
         print(breakout_msg)
         print("\n[BREAKOUT SUMMARY]", breakout_result.get("summary", ""))
@@ -411,6 +443,19 @@ def main():
     # 合并所有策略消息为一条推送
     push_ok = _send_text(combined_msg)
     print(f"\n📨 合并推送完成，共{len(all_messages)}个策略模块，市场状态={cluster_info.get('cluster_name_cn', '未知')}")
+
+    # 记录当日推荐数到健康度监控，驱动降级/恢复
+    # ★ 必须显式传北京时间日期：GitHub Actions 的 datetime.now() 是 UTC，
+    #   health_monitor 默认的日期会把一个交易日拆成两个日期，
+    #   使"连续0推荐天数"错乱（这正是降级长期不触发、Level 恒为 0 的原因之一）。
+    try:
+        bjt_date = now_bjt().strftime("%Y-%m-%d")
+        health.record_recommendations(len(all_recommended), date=bjt_date)
+        new_level = health.get_current_params_override()["level"]
+        print(f"[健康度] {bjt_date} 累计推荐 {len(all_recommended)} 只 → 降级 Level {new_level}"
+              f"{'（下一档扫描开始生效）' if new_level > param_override['level'] else ''}")
+    except Exception as e:
+        print(f"⚠️ 健康度记录失败: {e}")
 
     # 打印健康度报告
     print("\n" + health.get_health_report())

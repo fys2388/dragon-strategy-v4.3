@@ -27,12 +27,14 @@ LOG = logging.getLogger("scanner")
 class OversoldReboundScanner:
     """超跌反弹扫描器。"""
 
-    def __init__(self):
+    def __init__(self, use_full_market: bool = False):
         self.engine = SignalEngine()
         self.base_dir = ds.os.path.dirname(ds.os.path.dirname(ds.os.path.dirname(ds.os.path.abspath(__file__))))
         self.cache_file = ds.os.path.join(self.base_dir, "data", "oversold_cache.json")
         self.cache = self._load_cache()
         self.quality_pool = self._load_quality_pool()
+        # 全市场开关：health_monitor Level 3 降级时置 True
+        self.use_full_market = use_full_market
 
     def _load_quality_pool(self) -> set:
         pool_file = ds.os.path.join(self.base_dir, "data", "quality_pool.json")
@@ -150,8 +152,8 @@ class OversoldReboundScanner:
         code = str(stock.get("code", ""))
         if not code.startswith(("60", "00")):
             return False
-        # 优质股票池过滤（基本面预筛选）
-        if self.quality_pool and code not in self.quality_pool:
+        # 优质股票池过滤（基本面预筛选）；Level 3 降级时退回全市场
+        if self.quality_pool and not self.use_full_market and code not in self.quality_pool:
             return False
         price = float(stock.get("price", 0) or 0)
         cap = float(stock.get("float_cap_yi", 0) or 0)
@@ -165,8 +167,16 @@ class OversoldReboundScanner:
             return False
         return True
 
-    def run(self, max_stocks: int = 2000, need_push: bool = False) -> Dict:
-        """执行超跌反弹扫描。"""
+    def run(self, max_stocks: int = 2000, need_push: bool = False,
+            param_override: Optional[Dict] = None) -> Dict:
+        """执行超跌反弹扫描。
+
+        Args:
+            param_override: health_monitor.get_current_params_override() 的返回值；
+                其中的 ``oversold`` 覆盖会合并进 cfg，``general.use_full_market``
+                会打开全市场扫描。Level 2 起把 20 日跌幅要求从 30% 放宽到 20%，
+                这是让 Agent 在长期 0 推荐时能重新拿到学习素材的关键路径。
+        """
         cfg = OVERSOLD_REBOUND.copy()
         # 自适应：获取当前市场环境和动态参数
         from .data_validator import get_data_with_fallback
@@ -179,10 +189,21 @@ class OversoldReboundScanner:
         for key in ['drop_20d_min', 'today_gain_min', 'volume_ratio_min', 'daily_dif_floor', 'max_recommendations']:
             if key in adaptive_params:
                 cfg[key] = adaptive_params[key]
-        LOG.info(f"[自适应] 市场环境={regime}({REGIME_LABELS.get(regime, '未知')}) 参数={adaptive_params['name']} 超跌要求={cfg['drop_20d_min']}% 启动涨幅={cfg['today_gain_min']}%")
+
+        # 健康度降级覆盖（Level 2 起放宽超跌要求）
+        degradation_level = 0
+        if param_override:
+            from .health_monitor import HealthMonitor
+            cfg = HealthMonitor.merge_override(cfg, "oversold", param_override)
+            self.use_full_market = bool(
+                param_override.get("general", {}).get("use_full_market", False)
+            )
+            degradation_level = int(param_override.get("level", 0))
+        LOG.info(f"[自适应] 市场环境={regime}({REGIME_LABELS.get(regime, '未知')}) 参数={adaptive_params['name']} 超跌要求={cfg['drop_20d_min']}% 启动涨幅={cfg['today_gain_min']}% 降级Level={degradation_level} 全市场={self.use_full_market}")
         result = {
             "scan_time": now_bjt().strftime("%Y-%m-%d %H:%M:%S"),
             "mode": "oversold_rebound",
+            "degradation_level": degradation_level,
             "entries": [],
             "scanned_count": 0,
             "passed_count": 0,

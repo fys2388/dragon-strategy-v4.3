@@ -63,7 +63,10 @@ class BreakoutScanner:
                         continue
                     try:
                         rec = _json.loads(line)
-                        scan_time = rec.get('scan_time', '')
+                        # tracking 里存的是 recommend_time（不是 scan_time）；
+                        # 原实现找错字段 → daily_counts 恒为空 → 饥饿度恒为 7
+                        # （等于永远"大幅放宽"），自适应形同虚设。
+                        scan_time = rec.get('recommend_time', '') or rec.get('scan_time', '')
                         if scan_time:
                             day = scan_time[:10]  # YYYY-MM-DD
                             strategy = rec.get('strategy', '')
@@ -112,10 +115,13 @@ class BreakoutScanner:
                         try:
                             rec = _json.loads(line)
                             if rec.get('status') == 'completed':
-                                day5 = rec.get('day5_return_pct')
-                                day10 = rec.get('day10_return_pct')
-                                if (day5 is not None and day5 < -3) or (day10 is not None and day10 < -3):
-                                    scan_date = str(rec.get('scan_time', ''))[:10]
+                                # 取已算出的最坏一段收益（3/5/10/20 日）：
+                                # 完成窗口改为第 3 个交易日后，day5/day10 常为 None，
+                                # 只看它们会让冷却期永远不生效。
+                                rets = [rec.get(f'day{d}_return_pct') for d in (3, 5, 10, 20)]
+                                rets = [r for r in rets if r is not None]
+                                if rets and min(rets) < -3:
+                                    scan_date = str(rec.get('recommend_time', '') or rec.get('scan_time', ''))[:10]
                                     if scan_date >= cutoff:
                                         cooldown.add(rec.get('code', ''))
                         except Exception:
@@ -260,9 +266,19 @@ class BreakoutScanner:
         total = base + vol_price + position + ma20_bonus
         return round(max(0, min(total, 100)), 1)
 
-    def run(self, max_stocks: int = 1200, need_push: bool = False) -> Dict:
-        """执行趋势突破扫描（融合熊猫有财投资体系）。"""
+    def run(self, max_stocks: int = 1200, need_push: bool = False,
+            param_override: dict = None) -> Dict:
+        """执行趋势突破扫描（融合熊猫有财投资体系）。
+
+        Args:
+            param_override: health_monitor.get_current_params_override() 的返回值；
+                其中的 ``breakout`` 覆盖会生效于最低得分/量比/推荐上限，
+                ``general.use_full_market`` 会打开全市场扫描。
+        """
         t0 = time.time()
+        # 每次 run() 重新初始化降级量比，避免上一次调用的值残留
+        self._override_volume_ratio = None
+        self.use_full_market = False
         result = {
             "scan_time": now_bjt().strftime("%Y-%m-%d %H:%M:%S"),
             "mode": "breakout",
@@ -280,6 +296,29 @@ class BreakoutScanner:
         score, gate_desc, can_open = evaluate_market_gate()
         result["market_score"] = score
         result["can_open"] = can_open
+
+        # 0.1 市场环境：写进 result，tracking 才能按 regime 归因。
+        # 原实现从不写 regime → 突破策略的学习记录全是 "unknown"，
+        # regime 条件化分析对这个策略完全失效。
+        from .market_regime import REGIME_LABELS, classify_regime
+        from .data_validator import get_market_data
+        try:
+            regime = classify_regime(get_market_data())
+        except Exception as e:
+            LOG.warning(f"[趋势突破] 市场环境识别失败: {e}，按震荡市处理")
+            regime = "sideways"
+        result["regime"] = regime
+        result["regime_label"] = REGIME_LABELS.get(regime, "未知")
+
+        # 0.2 健康度降级覆盖（Level 1 起取消最低得分、放宽量比）
+        degradation_level = 0
+        use_full_market = False
+        if param_override:
+            from .health_monitor import HealthMonitor
+            override = HealthMonitor.merge_override({}, "breakout", param_override)
+            degradation_level = int(param_override.get("level", 0))
+            use_full_market = bool(param_override.get("general", {}).get("use_full_market", False))
+        result["degradation_level"] = degradation_level
 
         # 大盘<3分：不推荐
         if score < 3.0:
@@ -316,6 +355,25 @@ class BreakoutScanner:
         result["hunger_days"] = hunger_days
         result["hunger_level"] = hunger_level
 
+        # === 健康度降级覆盖（health_monitor）：真正生效 ===
+        # 原实现里 get_current_params_override() 只在 v43_push.py 打印，从未传入任何扫描器。
+        # 饥饿度自适应（上面这段）与系统级降级是两套并行机制，此处叠加、取更宽的一方。
+        if param_override:
+            bo = HealthMonitor.merge_override({}, "breakout", param_override)
+            if "min_score_override" in bo:
+                min_score_override = min(min_score_override, int(bo["min_score_override"]))
+            if "max_recommend" in bo:
+                max_recommend = max(max_recommend, int(bo["max_recommend"]))
+            if "volume_ratio_min" in bo:
+                self._override_volume_ratio = float(bo["volume_ratio_min"])
+            if degradation_level > 0:
+                LOG.warning(f"[趋势突破][健康度降级] Level {degradation_level}："
+                            f"最低得分={min_score_override} 上限={max_recommend} "
+                            f"量比={self._override_volume_ratio}")
+
+        # Level 3 降级：放开优质股票池，退回全市场
+        self.use_full_market = use_full_market
+
         # 1. 获取股票池
         from .data_validator import get_cached_pool, set_cached_pool
         try:
@@ -340,7 +398,8 @@ class BreakoutScanner:
                 continue
             if not code.startswith(("60", "00")):
                 continue
-            if self.quality_pool and code not in self.quality_pool:
+            # 优质股票池；Level 3 降级时退回全市场
+            if self.quality_pool and not self.use_full_market and code not in self.quality_pool:
                 continue
             price = float(s.get("price", 0) or 0)
             cap = float(s.get("float_cap_yi", 0) or 0)
@@ -366,7 +425,8 @@ class BreakoutScanner:
             if not s.get("is_breakout"):
                 reject_reasons["未突破20日新高"] += 1
                 continue
-            vr_min = self.optimized_params.get('volume_ratio_min', 1.5)
+            vr_min = getattr(self, "_override_volume_ratio", None) \
+                or self.optimized_params.get('volume_ratio_min', 1.5)
             if s.get("volume_ratio", 0) < vr_min:
                 reject_reasons[f"量比{s.get('volume_ratio', 0):.1f}<{vr_min}"] += 1
                 continue
@@ -426,6 +486,12 @@ class BreakoutScanner:
         if filtered_count > 0:
             LOG.info(f"[趋势突破] 基本面硬过滤：{filtered_count}只基本面不达标被过滤")
 
+        # 6b. 高位股过滤：高位突破直接排除（融合P0规则，避免追高）
+        high_risk_list = [s for s in fundamental_filtered if s.get("position_type") == "high"]
+        if high_risk_list:
+            LOG.info(f"[趋势突破] 高位过滤：{len(high_risk_list)}只高位股排除（{', '.join(s['name'] for s in high_risk_list[:5])}）")
+        fundamental_filtered = [s for s in fundamental_filtered if s.get("position_type") != "high"]
+
         # 7. 综合打分排序（融合熊猫有财技术面 + 黄阳基本面）
         # 门控：宽松档（3-4分）提高最低得分要求
         if min_score_override > 0:
@@ -440,19 +506,13 @@ class BreakoutScanner:
         # 7. 生成推荐条目
         entries = []
         for s in top:
-            # 构建推荐理由（融合位置和量价信息）
+            # 构建推荐理由（精简版：位置+量价信息已由tags展示，reason只补充关键上下文）
             reason_parts = [
-                f"突破20日新高({s.get('breakout_high', 0):.2f}元)",
+                f"突破20日新高{s.get('breakout_high', 0):.2f}元",
                 f"量比{s.get('volume_ratio', 0):.1f}",
             ]
-            if s.get("position_type") == "low":
-                reason_parts.append("低位突破")
-            elif s.get("position_type") == "high":
-                reason_parts.append("高位突破⚠️")
-            if s.get("vol_price_health") == "healthy":
-                reason_parts.append("放量健康")
-            elif s.get("vol_price_health") == "weak":
-                reason_parts.append("缩量虚涨⚠️")
+            if s.get("gain_from_60d_low") is not None and s.get("gain_from_60d_low", 0) > 0:
+                reason_parts.append(f"60日涨幅{s.get('gain_from_60d_low', 0):.0f}%")
             reason_parts.append("均线多头")
 
             entries.append({
@@ -471,6 +531,18 @@ class BreakoutScanner:
             })
 
         result["entries"] = entries
+        result["high_risk_entries"] = [
+            {
+                "code": s["code"],
+                "name": s["name"],
+                "price": s["price"],
+                "score": round(self._calc_composite_score(s), 1),
+                "today_gain_pct": round(s.get("today_gain_pct", 0), 1),
+                "position_type": s.get("position_type", "unknown"),
+                "gain_from_60d_low": round(s.get("gain_from_60d_low", 0), 1),
+            }
+            for s in high_risk_list[:5]
+        ]
         result["recommend_count"] = len(entries)
         result["summary"] = (
             f"趋势突破：扫描{len(all_stocks)}只 → 初筛{len(candidates)}只 → "
@@ -486,29 +558,58 @@ class BreakoutScanner:
 
 
 def build_breakout_message(result: Dict) -> str:
-    """趋势突破策略飞书消息（极简版，融合黄阳基本面评级）。"""
+    """趋势突破策略飞书消息（统一模板，含止损/仓位/目标价，高位股单独标注）。"""
     entries = result.get("entries", [])
-    if not entries:
+    high_risk = result.get("high_risk_entries", [])
+
+    if not entries and not high_risk:
         return "🚀 趋势突破：无推荐"
 
+    # 风控参数（与 config.py RISK 一致）
+    from .config import RISK
+    stop_loss_pct = RISK.get("stop_loss_pct", 0.04)
+    pos_pct = RISK.get("position_pct", 0.30)
+    stop_line = f"-{stop_loss_pct * 100:.0f}%"
+
     lines = ["🚀 趋势突破："]
-    for i, e in enumerate(entries, 1):
-        # 位置标记
-        pos_tag = ""
-        if e.get("position_type") == "low":
-            pos_tag = "低位"
-        elif e.get("position_type") == "high":
-            pos_tag = "高位⚠️"
-        # 量价标记
-        vp_tag = ""
-        if e.get("vol_price_health") == "healthy":
-            vp_tag = "放量"
-        elif e.get("vol_price_health") == "weak":
-            vp_tag = "缩量⚠️"
-        tags = f"[{pos_tag}{vp_tag}]" if pos_tag or vp_tag else ""
-        # 黄阳基本面评级
-        hy_grade = e.get("huangyang_grade", "")
-        hy_tag = f"基本面{hy_grade}" if hy_grade and hy_grade != "未知" else ""
-        all_tags = f"{tags}{hy_tag}" if hy_tag else tags
-        lines.append(f"  {i}. {e['name']}({e['code']}) {e['price']}元 +{e['today_gain_pct']}% 得分{e['score']}{all_tags}")
+    if entries:
+        for i, e in enumerate(entries, 1):
+            # 位置标记
+            pos_tag = ""
+            if e.get("position_type") == "low":
+                pos_tag = "📍 低位"
+            elif e.get("position_type") == "mid":
+                pos_tag = "📍 中位"
+            # 量价标记
+            vp_tag = ""
+            if e.get("vol_price_health") == "healthy":
+                vp_tag = "✅ 放量"
+            elif e.get("vol_price_health") == "weak":
+                vp_tag = "⚠️ 缩量"
+            tags = f"{pos_tag} {vp_tag}".strip()
+
+            # 基本面
+            hy_score = e.get("huangyang_score", 50)
+            hy_grade = e.get("huangyang_grade", "未知")
+
+            # 核心逻辑
+            reason = e.get("reason", "")
+
+            lines.append(f"  {i}. {e['name']}({e['code']}) {e['price']}元 +{e['today_gain_pct']}% 得分{e['score']}")
+            lines.append(f"     {tags} | 📊 基本面{hy_score}分({hy_grade})")
+            if reason:
+                lines.append(f"     💡 {reason}")
+            lines.append(f"     🛡️ 止损{stop_line} | 💰 建议仓位{pos_pct * 100:.0f}%")
+    else:
+        lines.append("  无推荐")
+
+    # 高位股单独标注
+    if high_risk:
+        lines.append("")
+        lines.append("🔴 以下高位股不建议追入：")
+        for e in high_risk:
+            gain_low = e.get("gain_from_60d_low", 0)
+            lines.append(f"  · {e['name']}({e['code']}) +{e['today_gain_pct']}% "
+                         f"60日涨幅{gain_low:.0f}% — 建议观望")
+
     return "\n".join(lines)

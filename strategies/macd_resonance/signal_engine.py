@@ -168,19 +168,32 @@ class SignalEngine:
         else:
             reasons.append("30min金叉")
 
-        # F. 15分钟：标准档要求上穿零轴，宽松档仅需金叉
+        # F. 15分钟：标准档要求零轴上方，宽松档「零轴上方 或 金叉」即可
+        # ★ 时间尺度错配修复（docs/HANDOFF.md §6.4.1 遗留项）：
+        #   日线 MACD 是持续状态，分钟级金叉/上穿零轴是瞬时事件。原实现要求
+        #   60/30/15min 同时处于金叉态，三个瞬时事件在同一时段同时命中的概率极低——
+        #   实测 80 只候选里 60min 金叉仅 5 只、30min 仅 4 只、15min 上穿零轴仅 3 只，
+        #   交集必然为空 → 共振策略长期 0 推荐（另一个独立根因是 min_score 量纲错位，
+        #   已在 adaptive_config.MACD_PARAMS 修掉）。
+        #   现在把「必须刚发生金叉/上穿」改成「处于多头状态」，
+        #   仍保留多周期同向这个核心，只是不再赌三个瞬时事件撞在同一根 K 线上。
         df_15, dif_15, dea_15, _ = self._tf_macd(code, "15m", 200)
         if df_15.empty:
             return None
-        # ★ 同 60min/30min：使用 recent_golden_cross 避免午后扫描漏检
-        if not recent_golden_cross(dif_15, dea_15, lookback=3):
-            return None
+        dif_15_last = self._last(dif_15)
+        tf15_golden = bool(recent_golden_cross(dif_15, dea_15, lookback=3))
+        tf15_above_zero = bool(dif_15_last is not None and dif_15_last > 0)
+
         if mode_cfg["tf15_require_cross_zero"]:
-            if not cross_above_zero(dif_15):
+            # 标准档：15min DIF 必须已在零轴上方
+            if not tf15_above_zero:
                 return None
-            reasons.append("15min金叉上穿零轴")
+            reasons.append("15min零轴上方")
         else:
-            reasons.append("15min金叉")
+            # 宽松档：零轴上方 或 近3根金叉，满足其一即可
+            if not (tf15_above_zero or tf15_golden):
+                return None
+            reasons.append("15min零轴上方" if tf15_above_zero else "15min金叉")
 
         # G. 量能确认：当日成交量 > 前5日均量 × 模式对应阈值
         if len(df_d) < 6:
