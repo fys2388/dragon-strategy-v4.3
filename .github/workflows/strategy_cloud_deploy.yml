@@ -55,7 +55,9 @@ jobs:
       - name: 安装依赖
         run: |
           python -m pip install --upgrade pip
-          pip install requests pandas numpy akshare scikit-learn
+          # lightgbm 必须装：AI 打分器加载 data/models/lgbm_model.pkl 时用 lightgbm 推理，
+          # 缺它时即使模型文件在仓库里也会静默降级为规则打分（见 ai_predictor.py）。
+          pip install requests pandas numpy akshare scikit-learn lightgbm
 
       - name: 运行MACD多周期共振策略推送
         env:
@@ -93,10 +95,17 @@ jobs:
           for f in data/tracking.jsonl \
                    data/system_health.json \
                    data/optimization_state.json \
+                   data/optimized_params.json \
+                   data/strategy_weights.json \
+                   data/ab_test_state.json \
                    data/evolution_log.jsonl \
                    data/performance_summary.json \
                    data/weekly_optimization_report.json \
-                   data/user_feedback.jsonl; do
+                   data/user_feedback.jsonl \
+                   data/strategy_history.jsonl \
+                   data/risk_state.json \
+                   data/position_sizing.json; do
+
             if [ -f "$f" ]; then
               git add "$f"
               echo "已暂存学习数据: $f"

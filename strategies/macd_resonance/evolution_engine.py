@@ -9,7 +9,8 @@
 
 设计原则：
 - 保守进化：每次只调整1-2个参数，避免剧烈变化
-- 样本门槛：至少5个样本才进化，避免过拟合
+- 样本门槛：冷启动期 3 条完成样本即进化（loop_config），样本充足后回调到 5 条
+- 完成窗口：第 3 个交易日即计入完成样本（见 tracking.loop_config.COMPLETION_DAY）
 - 回滚机制：进化后表现下降自动回滚
 - 可解释：每次进化都有明确的原因和数据支撑
 """
@@ -23,6 +24,7 @@ from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple
 
 from .tracking import _load_records, TRACKING_FILE
+from .loop_config import COMPLETION_DAY, COMPLETION_DAY_FIELD, min_samples_for
 from .adaptive_config import (
     MACD_PARAMS, OVERSOLD_PARAMS, save_optimized_params,
     OPTIMIZED_PARAMS_FILE,
@@ -74,11 +76,14 @@ class EvolutionEngine:
 
     def evaluate_current_params(self) -> Dict[str, Any]:
         """评估当前参数表现。"""
+        min_needed = min_samples_for("evolution")
         records = _load_records()
-        completed = [r for r in records if r.get("status") == "completed" and r.get("day5_return_pct") is not None]
+        completed = [r for r in records
+                     if r.get("status") == "completed" and r.get(COMPLETION_DAY_FIELD) is not None]
 
-        if len(completed) < 5:
-            return {"status": "insufficient_data", "count": len(completed), "message": "样本不足5只，暂不进化"}
+        if len(completed) < min_needed:
+            return {"status": "insufficient_data", "count": len(completed), "min_needed": min_needed,
+                    "message": f"完成样本 {len(completed)}/{min_needed} 条（口径=第{COMPLETION_DAY}个交易日收益），暂不进化"}
 
         # 按策略分组
         by_strategy = defaultdict(list)
@@ -87,7 +92,7 @@ class EvolutionEngine:
 
         evaluation = {}
         for strategy, recs in by_strategy.items():
-            returns = [r["day5_return_pct"] for r in recs]
+            returns = [r[COMPLETION_DAY_FIELD] for r in recs]
             win_rate = sum(1 for r in returns if r > 0) / len(returns) * 100
             avg_return = sum(returns) / len(returns)
             max_return = max(returns)
@@ -122,11 +127,15 @@ class EvolutionEngine:
             avg_return = perf["avg_return"]
 
             # 进化逻辑
+            # ⚠️ 步长按 min_score 的新量纲（1.0~4.0）设定。
+            #    原实现用 +15/+5/-10（那是旧 40~80 百分制量纲），
+            #    改量纲后不跟着改会把门槛推进到 16.5 之类的不可能值。
+            #    这里一步 ±0.25~0.5 分，等价于旧的 ±5~15 分。
             if win_rate < 40:
                 # 胜率太低，大幅收紧
                 if strategy == "resonance":
                     optimized[param_group]["sideways"] = {
-                        "min_score": min(base_params["sideways"].get("min_score", 60) + 15, 90),
+                        "min_score": round(min(base_params["sideways"].get("min_score", 2.0) + 0.5, 4.0), 2),
                         "amplitude_20d_max": max(base_params["sideways"].get("amplitude_20d_max", 40) - 10, 25),
                     }
                 else:
@@ -140,7 +149,7 @@ class EvolutionEngine:
                 # 胜率偏低，适度收紧
                 if strategy == "resonance":
                     optimized[param_group]["sideways"] = {
-                        "min_score": min(base_params["sideways"].get("min_score", 60) + 5, 85),
+                        "min_score": round(min(base_params["sideways"].get("min_score", 2.0) + 0.25, 4.0), 2),
                     }
                 else:
                     optimized[param_group]["sideways"] = {
@@ -152,7 +161,7 @@ class EvolutionEngine:
                 # 胜率高且收益好，放宽捕捉更多机会
                 if strategy == "resonance":
                     optimized[param_group]["sideways"] = {
-                        "min_score": max(base_params["sideways"].get("min_score", 60) - 10, 40),
+                        "min_score": round(max(base_params["sideways"].get("min_score", 2.0) - 0.5, 1.0), 2),
                         "amplitude_20d_max": min(base_params["sideways"].get("amplitude_20d_max", 40) + 10, 60),
                     }
                 else:
@@ -275,12 +284,21 @@ class EvolutionEngine:
     # ============================================================
 
     def optimize_strategy_weights(self) -> Dict[str, Any]:
-        """根据各策略表现优化推荐权重。"""
-        records = _load_records()
-        completed = [r for r in records if r.get("status") == "completed" and r.get("day5_return_pct") is not None]
+        """根据各策略表现优化推荐权重。
 
-        if len(completed) < 10:
-            return {"status": "insufficient_data", "weights": {"resonance": 0.5, "oversold": 0.5}}
+        修复：原实现只统计 resonance / oversold 两个策略，
+        而突破策略（breakout）是当前唯一持续产出推荐样本的策略，
+        被排除在外导致权重永远算成 {resonance: 0.5, oversold: 0.5} 的默认值。
+        """
+        min_needed = min_samples_for("weight")
+        records = _load_records()
+        completed = [r for r in records
+                     if r.get("status") == "completed" and r.get(COMPLETION_DAY_FIELD) is not None]
+
+        if len(completed) < min_needed:
+            return {"status": "insufficient_data", "count": len(completed), "min_needed": min_needed,
+                    "weights": {"resonance": 1 / 3, "oversold": 1 / 3, "breakout": 1 / 3},
+                    "message": f"完成样本 {len(completed)}/{min_needed} 条（口径=第{COMPLETION_DAY}个交易日收益），暂不优化权重"}
 
         by_strategy = defaultdict(list)
         for r in completed:
@@ -288,10 +306,10 @@ class EvolutionEngine:
 
         weights = {}
         total_score = 0
-        for strategy in ["resonance", "oversold"]:
+        for strategy in ["resonance", "oversold", "breakout"]:
             recs = by_strategy.get(strategy, [])
             if recs:
-                returns = [r["day5_return_pct"] for r in recs]
+                returns = [r[COMPLETION_DAY_FIELD] for r in recs]
                 win_rate = sum(1 for r in returns if r > 0) / len(returns) * 100
                 avg_return = sum(returns) / len(returns)
                 # 综合评分：胜率*0.6 + 平均收益*0.4
@@ -306,8 +324,9 @@ class EvolutionEngine:
         for strategy in weights:
             weights[strategy] = round(weights[strategy] / total_score, 2)
 
-        # 保存权重
+        # 保存权重（fresh clone 里 data/ 可能不存在，先建目录）
         weights_file = os.path.join(BASE_DIR, "data", "strategy_weights.json")
+        os.makedirs(os.path.dirname(weights_file), exist_ok=True)
         with open(weights_file, "w", encoding="utf-8") as f:
             json.dump({"weights": weights, "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}, f, ensure_ascii=False, indent=2)
 
@@ -325,11 +344,32 @@ class EvolutionEngine:
     # 4. 进化报告
     # ============================================================
 
-    def get_evolution_report(self) -> str:
-        """生成进化报告。"""
-        evaluation = self.evaluate_current_params()
-        evolution_result = self.evolve_params()
-        weights = self.optimize_strategy_weights()
+    def get_evolution_report(self, evaluation: Optional[Dict] = None,
+                             evolution_result: Optional[Dict] = None,
+                             weights: Optional[Dict] = None) -> str:
+        """生成进化报告（纯展示，不写任何文件）。
+
+        修复：原实现在本方法内部调用 evolve_params() 和 optimize_strategy_weights()
+        （两者都会落盘 optimized_params / strategy_weights / evolution_log），
+        而 run_weekly_evolution() 之后又各调一次 →
+        每周参数被写两遍、进化日志翻倍，且"只是生成一份报告"就有副作用。
+        现在报告只消费传入的结果；缺省时按「无变更 / 已有权重文件」处理，不产生写入。
+        """
+        if evaluation is None:
+            evaluation = self.evaluate_current_params()
+        if evolution_result is None:
+            evolution_result = {"status": "insufficient_data" if evaluation.get("status") == "insufficient_data"
+                                else "no_change", "changes": []}
+        if weights is None:
+            weights_file = os.path.join(BASE_DIR, "data", "strategy_weights.json")
+            if os.path.exists(weights_file):
+                try:
+                    with open(weights_file, "r", encoding="utf-8") as f:
+                        weights = {"status": "ok", "weights": json.load(f).get("weights", {})}
+                except Exception:
+                    weights = {"status": "insufficient_data"}
+            else:
+                weights = {"status": "insufficient_data"}
 
         lines = [
             "🔄 策略进化报告（第4层闭环迭代）",
@@ -340,7 +380,9 @@ class EvolutionEngine:
 
         # 当前表现
         if evaluation["status"] == "insufficient_data":
-            lines.append(f"📊 当前样本：{evaluation['count']}只（不足5只，暂不进化）")
+            lines.append(
+                f"📊 当前完成样本：{evaluation['count']}/{evaluation.get('min_needed', '?')} 条"
+                f"（口径=第{COMPLETION_DAY}个交易日收益），暂不进化")
         else:
             lines.append("📊 当前策略表现：")
             for strategy, perf in evaluation.get("by_strategy", {}).items():
@@ -367,10 +409,15 @@ class EvolutionEngine:
         lines.append("")
 
         # 策略权重
-        if weights["status"] == "ok":
+        if weights["status"] == "ok" and weights.get("weights"):
             lines.append("⚖️ 策略权重优化：")
             for strategy, weight in weights["weights"].items():
                 lines.append(f"  {strategy}：{weight*100:.0f}%")
+            lines.append("")
+        elif weights.get("status") == "insufficient_data":
+            lines.append(
+                f"⚖️ 策略权重：完成样本 {weights.get('count', 0)}/{weights.get('min_needed', '?')} 条，暂不优化（按均分推送）"
+            )
             lines.append("")
 
         # 进化历史
@@ -385,7 +432,8 @@ class EvolutionEngine:
                     lines.append(f"  {timestamp} 参数进化：{'; '.join(changes[:2])}")
                 elif evo_type == "weight_optimization":
                     w = evo.get("weights", {})
-                    lines.append(f"  {timestamp} 权重优化：MACD{w.get('resonance', 0)*100:.0f}% / 超跌{w.get('oversold', 0)*100:.0f}%")
+                    lines.append(f"  {timestamp} 权重优化：" + " / ".join(
+                        f"{k}{v*100:.0f}%" for k, v in w.items() if isinstance(v, (int, float))))
                 elif evo_type == "ab_test_conclusion":
                     c = evo.get("conclusion", {})
                     lines.append(f"  {timestamp} A/B测试：{c.get('winner', 'tie')}胜出")
@@ -396,17 +444,46 @@ class EvolutionEngine:
 
 
 def run_weekly_evolution() -> Dict[str, Any]:
-    """执行每周进化。"""
+    """执行每周进化（落盘动作只在此处显式发生，报告生成不再带副作用）。"""
     print("=" * 50)
     print("🔄 开始每周策略进化...")
     print("=" * 50)
 
     engine = EvolutionEngine()
-    report = engine.get_evolution_report()
+
+    # 1. 评估（只读）
+    evaluation = engine.evaluate_current_params()
+
+    # 2. 参数进化（唯一落盘点：optimized_params.json + evolution_log.jsonl）
+    if evaluation.get("status") == "ok":
+        evolution_result = engine.evolve_params()
+        if evolution_result.get("changes"):
+            print(f"🔧 本周参数进化 {len(evolution_result['changes'])} 项，已保存")
+    else:
+        print(f"📊 {evaluation.get('message', '样本不足')}")
+        evolution_result = {"status": "insufficient_data", "changes": [], "evaluation": evaluation}
+
+    # 3. 策略权重（唯一落盘点：strategy_weights.json + evolution_log.jsonl）
+    weights = engine.optimize_strategy_weights()
+
+    # 4. A/B 测试状态（框架已实现但尚未接入扫描主链路，如实报告而不是假装在工作）
+    ab_state = engine.ab_state or {}
+    active_ab = ab_state.get("active_test")
+    if active_ab:
+        print(f"🧪 进行中的 A/B 测试：{active_ab.get('id')}（{active_ab.get('strategy')}，"
+              f"已收 A {len(active_ab.get('results_a', []))} / B {len(active_ab.get('results_b', []))} 条）")
+    else:
+        print("🧪 A/B 测试：无活动测试（start_ab_test/record_ab_result 尚未接入扫描主链路，"
+              "接入方式见 docs/HANDOFF.md）")
+
+    # 5. 报告（纯展示）
+    report = engine.get_evolution_report(evaluation, evolution_result, weights)
     print("\n" + report)
 
     return {
         "report": report,
-        "evaluation": engine.evaluate_current_params(),
-        "weights": engine.optimize_strategy_weights(),
+        "evaluation": evaluation,
+        "evolution": evolution_result,
+        "weights": weights,
+        "ab_active": bool(active_ab),
     }

@@ -14,10 +14,21 @@ from typing import Dict, List, Optional
 
 from . import data_source as ds
 from .trading_calendar import now_bjt
+from .loop_config import (COMPLETION_DAY, COMPLETION_DAY_FIELD, FULL_TRACK_DAYS,
+                          completion_summary)
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 TRACKING_FILE = os.path.join(BASE_DIR, "data", "tracking.jsonl")
 PERFORMANCE_FILE = os.path.join(BASE_DIR, "data", "performance_summary.json")
+
+# 记录时透传的策略特征字段：周度优化器按位置类型 / 基本面评级分组分析时读取。
+# 之前 tracking 只存 code/name/price/score/reason，weekly_optimizer 的 by_position /
+# by_grade 分组永远拿到 "unknown"，导致整套分维度分析形同虚设。
+EXTRA_TRACK_FIELDS = (
+    "position_type", "huangyang_grade", "huangyang_score",
+    "vol_price_health", "strategy_mode",
+    "ai_probability", "ai_rule_score", "ai_score_basis", "ai_model",
+)
 
 
 def _load_records() -> List[Dict]:
@@ -88,6 +99,8 @@ def record_recommendations(entries: List[Dict], strategy_type: str, scan_time: s
             "recommend_date": date_key,
             "score": e.get("score", 0),
             "reason": e.get("reason", ""),
+            # 策略特征透传（供周度优化器分维度分析）：只写入候选条目里真实存在的字段
+            **{k: e.get(k) for k in EXTRA_TRACK_FIELDS if k in e},
             "status": "tracking",
             "track_days": 0,
             "current_price": price,
@@ -115,6 +128,30 @@ def record_recommendations(entries: List[Dict], strategy_type: str, scan_time: s
 
     print(f"[跟踪] 新记录 {new_count} 只推荐股（策略={strategy_type}）")
     return new_count
+
+
+def get_daily_recommend_counts(strategy: str = None) -> Dict[str, int]:
+    """按日期统计推荐数量。
+
+    Args:
+        strategy: 只统计某个策略（resonance / oversold / breakout）；None 表示全部。
+
+    Returns:
+        {YYYY-MM-DD: count}，按日期升序。
+
+    用途：health_monitor 与 breakout 饥饿度判断需要「某天到底推荐了几只」，
+    此前各模块自己从 tracking.jsonl 解析且字段名用错（找 scan_time，实际存的是
+    recommend_time），导致连续0推荐天数恒为 0 或恒为 7。这里统一口径。
+    """
+    counts: Dict[str, int] = {}
+    for r in _load_records():
+        rec_date = str(r.get("recommend_date", "") or str(r.get("recommend_time", ""))[:10])
+        if not rec_date:
+            continue
+        if strategy and r.get("strategy") != strategy:
+            continue
+        counts[rec_date] = counts.get(rec_date, 0) + 1
+    return dict(sorted(counts.items()))
 
 
 def _is_trading_day(date: datetime) -> bool:
@@ -170,17 +207,21 @@ def update_performance() -> Dict:
         high_map = dict(zip(df["date_str"], df["high"].astype(float)))
         low_map = dict(zip(df["date_str"], df["low"].astype(float)))
 
-        # 获取交易日序列
-        trading_days = _get_trading_days(recommend_date, 21)
+        # 获取交易日序列（+1 天余量，避免最后几天算不到）
+        trading_days = _get_trading_days(recommend_date, FULL_TRACK_DAYS + 1)
 
         # 更新各周期收益
         price_history = r.get("price_history", [])
         max_price = recommend_price
         min_price_after = recommend_price
+        full_window_done = False
 
         for i, day in enumerate(trading_days, 1):
             if day not in price_map:
-                break
+                # 推算的交易日与真实成交日错位（法定节假日 / 停牌）时跳过该天，
+                # 不能 break：原实现遇到第一个缺口就整段中断，
+                # 导致短窗口收益（day3/day5）在冷启动期经常永远算不出来。
+                continue
             close = price_map[day]
             high = high_map.get(day, close)
             low = low_map.get(day, close)
@@ -222,21 +263,32 @@ def update_performance() -> Dict:
             elif i == 10:
                 r["day10_close"] = close
                 r["day10_return_pct"] = ret
-            elif i == 20:
+            elif i == FULL_TRACK_DAYS:
                 r["day20_close"] = close
                 r["day20_return_pct"] = ret
-                r["status"] = "completed"
-                completed += 1
-                break
+                full_window_done = True
 
             r["track_days"] = i
 
-        # 更新当前价格和收益
-        latest_date = trading_days[min(len(trading_days) - 1, len(price_history) - 1)] if price_history else None
-        if latest_date and latest_date in price_map:
-            current_price = price_map[latest_date]
-            r["current_price"] = current_price
-            r["current_return_pct"] = round((current_price - recommend_price) / recommend_price * 100, 2)
+        # 完成判定：第 COMPLETION_DAY 个交易日的收益可用即标记 completed。
+        # 原实现在第 20 个交易日才 completed —— 每周 1-2 只推荐 × 20 个交易日，
+        # 叠加周度优化器（≥5 条）与进化引擎（≥10 条）的样本门，冷启动期永远打不开，
+        # 这是 Agent 学习闭环长期空转的根因之一。5/10/20 日收益仍照常计算，
+        # 只是 completed 标记提前：短窗口先供优化，长窗口留给绩效报告。
+        if r.get("status") != "completed" and (
+            full_window_done or r.get(COMPLETION_DAY_FIELD) is not None
+        ):
+            r["status"] = "completed"
+            r["completed_at"] = now.strftime("%Y-%m-%d %H:%M:%S")
+            completed += 1
+
+        # 更新当前价格和收益（取已记录价格历史中的最新一条）
+        if price_history:
+            latest = max(price_history, key=lambda p: str(p.get("date", "")))
+            current_price = price_map.get(latest.get("date"))
+            if current_price:
+                r["current_price"] = current_price
+                r["current_return_pct"] = round((current_price - recommend_price) / recommend_price * 100, 2)
 
         r["price_history"] = price_history[-25:]  # 只保留最近25条
         r["updated_at"] = now.strftime("%Y-%m-%d %H:%M:%S")
@@ -286,9 +338,11 @@ def get_performance_summary() -> Dict:
         "tracking": len([r for r in records if r["status"] == "tracking"]),
         "completed": len([r for r in records if r["status"] == "completed"]),
         "by_strategy": {},
+        # 跟踪口径写进报告本身：完成窗口和样本门槛不再是黑箱数字
+        "tracking_config": completion_summary(),
     }
 
-    for strategy in ["resonance", "oversold"]:
+    for strategy in ["resonance", "oversold", "breakout"]:
         subset = [r for r in records if r.get("strategy") == strategy]
         if not subset:
             continue
@@ -332,7 +386,17 @@ def build_performance_message(summary: Dict) -> str:
         "",
     ]
 
-    strategy_names = {"resonance": "MACD多周期共振", "oversold": "超跌反弹"}
+    strategy_names = {"resonance": "MACD多周期共振", "oversold": "超跌反弹", "breakout": "趋势突破"}
+    cfg = summary.get("tracking_config", {})
+    if cfg:
+        ms = cfg.get("min_samples", {})
+        stage = "冷启动" if cfg.get("cold_start") else "正常"
+        lines.append(
+            f"（完成窗口=第{cfg.get('completion_day')}个交易日即计入 completed；"
+            f"优化样本下限：周度{ms.get('weekly')}条/进化{ms.get('evolution')}条；"
+            f"当前为{stage}期）"
+        )
+        lines.append("")
     for strategy, name in strategy_names.items():
         stats = summary.get("by_strategy", {}).get(strategy)
         if not stats:

@@ -21,6 +21,15 @@ OPTIMIZED_PARAMS_FILE = os.path.join(BASE_DIR, "data", "optimized_params.json")
 # ============================================================
 
 # MACD多周期共振参数
+#
+# ⚠️ min_score 的口径（2026-09-21 修正，属于真实 bug 修复）：
+#   signal_engine.SignalEngine.check_long_entry() 的评分量纲是 1.0~4.0
+#   （基础 1 + 命中 1 + 日线零轴上方 0.5 + 60min 0.5×3，宽松档再 ×0.9），
+#   而 scanner.run() 用 adaptive_params["min_score"] 做过滤。
+#   原配置把 min_score 写成 40~80（那是 breakout 的百分制口径），
+#   导致 4.0 的满分信号永远 < 40，共振推荐被结构性清零——
+#   这是「共振长期 0 推荐」的真根因，不只是四周期交集太苛刻。
+#   现已改为 1.0~4.0 量纲，并按市场环境从宽到严排列。
 MACD_PARAMS = {
     "bull_market": {
         "name": "牛市配置",
@@ -29,7 +38,7 @@ MACD_PARAMS = {
         "require_tf30_golden": True,     # 30min金叉
         "require_tf60_golden": True,     # 60min金叉
         "amplitude_20d_max": 50.0,       # 20日振幅上限放宽到50%
-        "min_score": 50,                 # 最低得分降低
+        "min_score": 1.5,                # 共振评分门槛（量纲1.0~4.0）：牛市放宽
         "max_recommendations": 5,
         "position_pct": 0.35,            # 单票仓位35%
         "max_positions": 3,
@@ -44,7 +53,7 @@ MACD_PARAMS = {
         "require_tf30_golden": True,
         "require_tf60_golden": True,
         "amplitude_20d_max": 35.0,       # 20日振幅收紧到35%
-        "min_score": 70,                 # 最低得分提高
+        "min_score": 2.5,                # 熊市收严：要求更完整的共振
         "max_recommendations": 3,
         "position_pct": 0.20,            # 单票仓位20%
         "max_positions": 2,
@@ -59,7 +68,7 @@ MACD_PARAMS = {
         "require_tf30_golden": True,
         "require_tf60_golden": True,
         "amplitude_20d_max": 45.0,
-        "min_score": 55,
+        "min_score": 1.5,
         "max_recommendations": 5,
         "position_pct": 0.30,
         "max_positions": 3,
@@ -74,7 +83,7 @@ MACD_PARAMS = {
         "require_tf30_golden": True,
         "require_tf60_golden": True,
         "amplitude_20d_max": 40.0,
-        "min_score": 60,
+        "min_score": 2.0,
         "max_recommendations": 3,
         "position_pct": 0.25,
         "max_positions": 2,
@@ -89,7 +98,7 @@ MACD_PARAMS = {
         "require_tf30_golden": True,
         "require_tf60_golden": True,
         "amplitude_20d_max": 30.0,
-        "min_score": 80,
+        "min_score": 3.0,
         "max_recommendations": 2,
         "position_pct": 0.15,
         "max_positions": 1,

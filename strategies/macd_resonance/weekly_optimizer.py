@@ -27,6 +27,11 @@ TRACKING_FILE = os.path.join(BASE_DIR, "data", "tracking.jsonl")
 WEEKLY_REPORT_FILE = os.path.join(BASE_DIR, "data", "weekly_optimization_report.json")
 OPTIMIZATION_STATE_FILE = os.path.join(BASE_DIR, "data", "optimization_state.json")
 
+# 样本口径统一走 loop_config：完成窗口 = 第 3 个交易日，冷启动期门槛 3 条。
+# 原实现写死 day5_return_pct + 5 条门槛，叠加 20 日完成窗口后永远打不开。
+from .loop_config import COMPLETION_DAY, COMPLETION_DAY_FIELD, min_samples_for  # noqa: E402
+from .trading_calendar import now_bjt  # noqa: E402
+
 
 def _load_records() -> List[Dict]:
     """加载跟踪记录。"""
@@ -77,13 +82,17 @@ def _save_optimization_state(state: Dict):
 
 def analyze_breakout_performance(records: List[Dict]) -> Dict[str, Any]:
     """分析突破策略表现。"""
+    min_needed = min_samples_for("weekly")
     breakout_records = [r for r in records if r.get("strategy") == "breakout" and r.get("status") == "completed"]
-    completed = [r for r in breakout_records if r.get("day5_return_pct") is not None]
+    completed = [r for r in breakout_records if r.get(COMPLETION_DAY_FIELD) is not None]
 
-    if len(completed) < 5:
-        return {"status": "insufficient_data", "count": len(completed), "message": "突破策略样本不足5只"}
+    if len(completed) < min_needed:
+        return {"status": "insufficient_data", "count": len(completed),
+                "min_needed": min_needed,
+                "message": f"突破策略完成样本 {len(completed)}/{min_needed} 条（"
+                           f"口径=第{COMPLETION_DAY}个交易日收益），继续积累"}
 
-    returns = [r["day5_return_pct"] for r in completed]
+    returns = [r[COMPLETION_DAY_FIELD] for r in completed]
     win_rate = sum(1 for r in returns if r > 0) / len(returns) * 100
     avg_return = sum(returns) / len(returns)
     max_return = max(returns)
@@ -93,7 +102,7 @@ def analyze_breakout_performance(records: List[Dict]) -> Dict[str, Any]:
     by_position = defaultdict(list)
     for r in completed:
         pos = r.get("position_type", "unknown")
-        by_position[pos].append(r.get("day5_return_pct", 0))
+        by_position[pos].append(r.get(COMPLETION_DAY_FIELD, 0))
 
     position_stats = {}
     for pos, rets in by_position.items():
@@ -108,7 +117,7 @@ def analyze_breakout_performance(records: List[Dict]) -> Dict[str, Any]:
     by_grade = defaultdict(list)
     for r in completed:
         grade = r.get("huangyang_grade", "unknown")
-        by_grade[grade].append(r.get("day5_return_pct", 0))
+        by_grade[grade].append(r.get(COMPLETION_DAY_FIELD, 0))
 
     grade_stats = {}
     for grade, rets in by_grade.items():
@@ -134,7 +143,9 @@ def analyze_breakout_performance(records: List[Dict]) -> Dict[str, Any]:
 def generate_optimization_suggestions(perf: Dict, state: Dict) -> List[Dict]:
     """生成优化建议。"""
     if perf["status"] == "insufficient_data":
-        return [{"type": "info", "message": f"样本不足（{perf['count']}只），本周不做参数优化，继续收集数据"}]
+        return [{"type": "info", "message": (
+            f"完成样本 {perf['count']}/{perf.get('min_needed', '?')} 条"
+            f"（口径=第{COMPLETION_DAY}个交易日收益），本周不做参数优化，继续收集数据")}]
 
     suggestions = []
     current = state["current_params"]["breakout"]
@@ -170,7 +181,7 @@ def generate_optimization_suggestions(perf: Dict, state: Dict) -> List[Dict]:
     repeated = defaultdict(list)
     for r in _load_records():
         if r.get("strategy") == "breakout" and r.get("status") == "completed":
-            repeated[r.get("code", "")].append(r.get("day5_return_pct", 0))
+            repeated[r.get("code", "")].append(r.get(COMPLETION_DAY_FIELD, 0))
 
     repeat_loss_count = sum(1 for code, rets in repeated.items() if len(rets) >= 2 and sum(1 for r in rets if r < 0) >= len(rets) * 0.5)
     if repeat_loss_count >= 2:
@@ -282,10 +293,14 @@ def generate_weekly_report() -> str:
     records = _load_records()
     state = _load_optimization_state()
 
-    # 统计本周数据
-    week_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
-    week_records = [r for r in records if str(r.get("scan_time", "")) >= week_ago]
-    week_completed = [r for r in week_records if r.get("status") == "completed" and r.get("day5_return_pct") is not None]
+    # 统计本周数据（tracking 存的是 recommend_date/recommend_time，用北京时间口径对齐）
+    week_ago = (now_bjt() - timedelta(days=7)).strftime("%Y-%m-%d")
+    week_records = [
+        r for r in records
+        if str(r.get("recommend_date", "") or str(r.get("recommend_time", ""))[:10]) >= week_ago
+    ]
+    week_completed = [r for r in week_records
+                      if r.get("status") == "completed" and r.get(COMPLETION_DAY_FIELD) is not None]
 
     # 分析突破策略表现
     perf = analyze_breakout_performance(records)

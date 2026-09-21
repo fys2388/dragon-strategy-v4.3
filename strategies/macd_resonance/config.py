@@ -59,13 +59,15 @@ SIGNAL = {
     # V2.0 双模式：standard(大盘≥4分) / relaxed(大盘3分)
     "mode_standard": {
         "tf30_require_dif_above_zero": True,   # 30分钟要求DIF>0
-        "tf15_require_cross_zero": True,       # 15分钟要求上穿零轴
+        "tf15_require_cross_zero": True,       # 15分钟要求DIF在零轴上方（多头状态）
         "require_breakout": True,              # 要求价格突破
         "volume_ratio_min": 1.2,                # 标准档量比1.2
     },
     "mode_relaxed": {
         "tf30_require_dif_above_zero": False,  # 30分钟仅需金叉
-        "tf15_require_cross_zero": False,      # 15分钟仅需金叉
+        # 15分钟放宽为「零轴上方 或 近3根金叉」：不再要求瞬时上穿零轴
+        #（瞬时事件与日线持续状态要求同时成立，是共振长期 0 推荐的成因之一）
+        "tf15_require_cross_zero": False,      # 15分钟零轴上方 或 金叉
         "require_breakout": False,             # 不要求突破
         "volume_ratio_min": 1.1,                # 宽松档量比1.1
     },
