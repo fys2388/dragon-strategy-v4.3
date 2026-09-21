@@ -1,12 +1,12 @@
 {
   "daily_recommendations": {
     "2026-09-20": 2,
-    "2026-09-21": 7
+    "2026-09-21": 4
   },
   "consecutive_zero_days": 0,
   "degradation_level": 0,
   "last_recommendation_date": "2026-09-21",
   "degradation_history": [],
   "recovery_history": [],
-  "updated_at": "2026-09-21 06:35:08"
+  "updated_at": "2026-09-21 06:49:37"
 }
