@@ -135,6 +135,11 @@ def run_replay_for_strategy(stock_codes: list, signal_func, strategy_name: str,
 
 
 def send_feishu(text: str):
+    # 手动 workflow_dispatch 触发时默认不推（PUSH_FEISHU 未显式开），
+    # 避免调试回放把验证报告刷进群里；周度定时档显式传 PUSH_FEISHU=true。
+    if os.environ.get("PUSH_FEISHU", "false").lower() != "true":
+        print("ℹ️ PUSH_FEISHU 未开启，仅本地打印回放报告，不推送飞书")
+        return
     webhook = os.environ.get("FEISHU_WEBHOOK_URL", "")
     if not webhook:
         print("⚠️ 未配置 FEISHU_WEBHOOK_URL")

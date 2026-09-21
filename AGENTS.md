@@ -14,7 +14,7 @@ A 股 **MACD 多周期共振**短线选股系统（日线 + 60min + 30min + 15mi
 | GitHub | `fys2388/dragon-strategy-v4.3`（public，直接推 `main`） |
 | Python | 3.12.2 本地 / 3.11 GitHub Actions |
 | 依赖 | requests, pandas, numpy, akshare（`requirements.txt`） |
-| 测试 | **92 passed / 0 failed**，约 1.6s，**全程 0 次真实网络请求** |
+| 测试 | **118 passed / 0 failed**，约 1.8s，**全程 0 次真实网络请求** |
 
 ## 2. 铁律（违反会导致推送中断或撞车）
 
@@ -56,7 +56,7 @@ scripts/
   morning_noon_push.py      盘前/午间报告生成（被 v43_push 复用）
   scheduler_health_check.py 调度器健康检查（数 workflow_dispatch 次数，异常才推飞书）
 
-.github/workflows/           10 个工作流
+.github/workflows/           12 个工作流
   strategy_cloud_deploy.yml ★ 盘中/盘前/尾盘推送（仅 workflow_dispatch）
   morning_noon_push.yml         已停定时，手动兜底
   strategy-push.yml           旧工作流，已停定时
@@ -64,6 +64,8 @@ scripts/
   daily_position_monitor.yml    14:00 持仓监控（保留 schedule）
   scheduler_health_check.yml    15:00 调度器健康检查（保留 schedule，监控 Worker/GITHUB_TOKEN 停摆）
   weekly_{performance,optimization,training,evolution}.yml  周日任务（保留 schedule）
+  weekly_replay_validation.yml  周日 23:00 历史回放验证（保留 schedule，周报类；手动档默认不推飞书）
+  user_feedback.yml         用户反馈录入（仅 workflow_dispatch，Agent 学习闭环的输入端）
 
 cloudflare-worker/          外部调度器 + 东财 API 代理
   worker.js                 调度表（北京时间）→ workflow_dispatch；/proxy/* 东财代理
@@ -98,7 +100,7 @@ knowledge/                  知识库文档
 ```bash
 # 1. 改完先编译 + 跑全量单测
 python -m py_compile scripts/v43_push.py strategies/macd_resonance/scanner.py
-python -m pytest tests -q            # 当前基线 92 passed / 0 failed，约 1.6s
+python -m pytest tests -q            # 当前基线 118 passed / 0 failed，约 1.8s
 #    出现任何 failed = 回归；耗时 >10s = 有单测在打真实行情接口（见坑 11）
 
 # 2. 提交（中文提交信息，与现有历史一致）
@@ -219,8 +221,20 @@ gh api "repos/fys2388/dragon-strategy-v4.3/contents/scripts/v43_push.py" -H "Acc
 
 ## 10. 当前状态（截至本文件写入）
 
-- 远端 `main` 已同步本地。**测试基线 92 passed / 0 failed**（全离线、0 次真实网络请求，约 1.6s）；
-  原 11 项失败的根因与修复逐项记录在 `docs/HANDOFF.md` §6.0。
+- 远端 `main` 已同步本地。**测试基线 118 passed / 0 failed**（全离线、0 次真实网络请求，约 1.8s）；
+  原 11 项失败的根因与修复逐项记录在 `docs/HANDOFF.md` §6.0；
+  2026-09-21 新增 26 项 Agent 学习闭环单测（`tests/test_agent_loop.py`）。
+- **Agent 能力提分改造已落地（2026-09-21，详见 `docs/HANDOFF.md` §9）**：
+  - P0 阻断级：完成窗口 20 交易日 → **第 3 个交易日**、样本门槛 5/10 → **3**（`loop_config.py` 唯一事实源）；
+    `min_score` 量纲 40–80 → **1.0–4.0**（原量纲错位会让 MACD 共振恒 0 推荐）；
+    健康度降级覆盖重写成 `macd/oversold/breakout/general` 四组并由三个扫描器真正应用；
+    回传清单补齐 `data/optimized_params.json` 等 6 个文件。
+  - P1：AI 打分诚实化（`rule_score` + `score_basis`，无模型不写 `ai_probability`）；
+    训练模型改为提交进仓库 + 推送环境补装 `lightgbm`；15min 共振条件改状态型；
+    `evolution_engine.get_evolution_report()` 去掉落盘副作用；策略权重纳入 breakout。
+  - P2：新增 `scripts/submit_feedback.py` + `user_feedback.yml`、`weekly_replay_validation.yml`。
+  ⚠️ 仍未决（需人工决策，本轮未动）：market_cluster vs market_regime 口径冲突；
+  样本攒够后把冷启动门槛回调到 5；A/B 测试框架仍是死代码。见 `docs/HANDOFF.md` §9.5。
 - 盘前报告已并入 `strategy_cloud_deploy.yml` 的 `premarket` 档，`morning_noon_push.yml` 定时已停用。
 - 云端双分支已验证：`premarket` 与 `scan` 均推送成功（HTTP 200）。
 - 盘前守卫已改为纯时间判断（9:45 后跳过），不再依赖 `TRIGGER`。

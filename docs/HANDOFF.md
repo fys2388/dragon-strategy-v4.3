@@ -461,3 +461,67 @@ gh workflow run "调度器健康检查" --repo fys2388/dragon-strategy-v4.3 -f a
 云端验证运行：`32803531452`（premarket ✅ HTTP 200）、`32803646853`（scan ✅ HTTP 200，扫描 ~5.5 分钟）。
 
 > 注：以上 4 个提交都已在远端 `main` 历史中（`d198f77` 是当前 HEAD 的祖先），后续并行代理的提交叠加在其上。
+
+---
+
+## 9. Agent 能力提分改造（P0/P1/P2 全量落地）
+
+上一轮交接后，Agent 学习闭环被评为「56/100」，主因不是代码少，而是**声称有的能力实际没接通**。
+本节记录本轮改动，全部已跑通 `python -m pytest tests -q`（**118 passed / 0 failed，1.8s**）。
+
+### 9.1 P0 — 阻断级（学习闭环完全无法启动）
+
+| # | 问题 | 修复 |
+|---|---|---|
+| P0-1 | 完成窗口 20 交易日 + 周度优化 ≥5 条 / 进化 ≥10 条 → 冷启动期样本门永远打不开 | 新增 `strategies/macd_resonance/loop_config.py` 作为**唯一事实源**：`COMPLETION_DAY=3`、`COMPLETION_DAY_FIELD="day3_return_pct"`、`MIN_COMPLETED_SAMPLES=3`、`min_samples_for(kind)`。`tracking` / `weekly_optimizer` / `evolution_engine` 全部改读它 |
+| P0-2 | `tracking.update_performance()` 遇到缺 K 线日 `break` 整段中断 → 短窗口收益永远算不出 | 改 `continue` 跳过；同时 `full_window_done` 标记保留，5/10/20 日收益照常计算，只是 `completed` 提前到第 3 个交易日 |
+| P0-3 | `adaptive_config.MACD_PARAMS.min_score` 量纲是 40–80，而 `signal_engine` 打分上限只有 4.0 → `min_score` 过滤条件恒不满足 | `min_score` 改为 1.0–4.0 量纲（含详细注释说明量纲来源），`config.py` 同步 |
+| P0-4 | `health_monitor` 降级覆盖算出来了但**没人读**，且键名对不上扫描器 | 重写覆盖结构为 `macd` / `oversold` / `breakout` / `general` 四组，键名逐个对齐三个扫描器实际读取的参数；新增 `HealthMonitor.merge_override()`（staticmethod，不改入参）；`scanner` / `oversold_rebound` / `breakout` 都接收 `param_override` 并真正应用 |
+| P0-5 | `strategy_cloud_deploy.yml` 回传清单缺 4 个文件 | 清单补为 13 个：新增 `data/optimized_params.json`（**进化引擎的参数回写目标，此前漏了 = 每次进化结果被清掉**）、`data/strategy_weights.json`、`data/ab_test_state.json`、`data/strategy_history.jsonl`、`data/risk_state.json`、`data/position_sizing.json` |
+
+**P0-3 是关键根因**：`min_score` 量纲错位会让 MACD 共振在任何行情下都产出 0 推荐，
+这正是 §6.4.1 长期「无推荐」的另一个结构性原因（与 15min 金叉条件叠加）。
+
+### 9.2 P1 — 文档与实现不一致
+
+| # | 问题 | 修复 |
+|---|---|---|
+| P1-1 | `health_monitor` 降级「只上不下」：`_check_recovery` 用 `datetime.now() - last_recommendation_date` 算天数，跨进程持久化后永远进不了 `days_since == 0` 分支 | `_check_recovery(record_date)` 改为按「本次记录日期 - 上次有推荐日期」相减，去掉墙钟依赖；`_recompute_zero_days` 改为从 `daily_recommendations` 幂等推导连续 0 推荐天数（盘中一天约被调用 10 次，原来会放大计数） |
+| P1-2 | 「AI 打分」实际是规则打分，却对外说成上涨概率 | `ai_predictor._rule_based_predict` 主字段改为 `rule_score`（0–100），显式标注 `score_basis="rule_based"` + `probability_is_actual_model=False`，并附 `rule_hits`（命中了哪些规则）；`predict()` 在有 LightGBM 时写 `score_basis="model"`；`AIScorer` 只在实际模型概率时写 `ai_probability`；`add_ai_info_to_message` 按 basis 分别措辞（规则打分不出现「上涨概率」） |
+| P1-3 | `AIScorer.add_ai_info_to_message` 从未被调用 → 推送里看不到打分 | `v43_push.py` 新增 `append_ai_score_block()`，三个策略消息都在打分过滤后附加打分块 |
+| P1-4 | 训练好的模型只上传 artifact，从不进仓库 → 推送环境永远加载不到 | `weekly_model_training.yml` 新增「提交模型文件到仓库」步骤；`strategy_cloud_deploy.yml` 依赖安装补 `lightgbm`（原清单缺它，即使模型在仓库也会静默降级为规则打分） |
+| P1-5 | 15min 共振条件「必须瞬时金叉」→ 4 周期交集必为空 | 改为状态型：`tf15_above_zero`（零轴上方）+ `tf15_golden`（3 日内金叉），符合 §6.4.1 的建议方向 |
+| P1-6 | `evolution_engine.get_evolution_report()` 内部偷偷写参数 → 每周参数被写两遍、报告有副作用 | 报告改为纯展示（只消费传入结果，缺省时不写盘）；`run_weekly_evolution()` 改为「先 mutation、再展示」，并显式汇报 A/B 测试状态 |
+| P1-7 | `optimize_strategy_weights` 只统计 resonance / oversold，breakout 被排除 → 权重永远算成 0.5/0.5 | 纳入 breakout，三策略均参与评分与归一化 |
+| P1-8 | `strategy_history.jsonl` 记录里没有 regime / 降级档位 | `_append_history` 补记 `regime` / `degradation_level` / `recommend_count` / `strategy`，供复盘与看板按环境切片 |
+
+### 9.3 P2 — 闭环缺件
+
+| # | 问题 | 修复 |
+|---|---|---|
+| P2-1 | `user_feedback.record_feedback()` 全仓库 0 调用方 → 反馈数据恒为 0 | 新增 `scripts/submit_feedback.py` + `.github/workflows/user_feedback.yml`（`workflow_dispatch`，无 `schedule`），反馈落盘后提交回仓库 |
+| P2-2 | `scripts/replay_validation.py` 无工作流引用 → 策略有效性从未被周期性验证 | 新增 `.github/workflows/weekly_replay_validation.yml`（周日 UTC 15:00 = BJT 23:00）；`send_feishu` 增加 `PUSH_FEISHU` 开关，手动触发默认不推群 |
+| P2-3 | 学习闭环 0 测试 | 新增 `tests/test_agent_loop.py`（**26 项**）：loop_config / tracking 第 3 日完成 + 停牌跳格 / 周度优化冷启动门槛 / 进化引擎门槛与无副作用报告 / 健康度降级阶梯 L0→L3 + 推荐即恢复 + 同日幂等 / 用户反馈写入 / AI 打分诚实标注 |
+
+### 9.4 测试基线更新
+
+| 项 | 改前 | 改后 |
+|---|---|---|
+| 用例数 | 92 | **118** |
+| 耗时 | ~1.6s | ~1.8s |
+| 真实网络请求 | 0 | **0**（新增测试全部 mock `data_source`，写盘重定向到临时目录） |
+
+> `AGENTS.md` 里的「92 passed」基线需要同步改成 118。
+
+### 9.5 仍未决（需要人工决策，本轮未动）
+
+1. **§6.4.1 的 market_cluster vs market_regime 口径冲突**：报告头部仓位按 `sideways_down` 给、
+   选股参数按 `bull_market` 跑。统一两个判定器需要一次口径决策。
+2. **样本攒够后回调冷启动阈值**：`loop_config.COLD_START` 目前为 `True`、门槛为 3；
+   攒到 5+ 条 completed 样本后应把门槛回调到 `MIN_SAMPLES_FULL=5`
+   （`min_samples_for("full")` 已备好），避免长期用小样本过拟合。
+3. **A/B 测试框架仍是死代码**：`evolution_engine` 的 `start_ab_test` / `record_ab_result` /
+   `conclude_ab_test` 没有扫描链路调用方。本轮让 `run_weekly_evolution()` 显式汇报其状态，
+   但接入扫描链路属策略行为变更，未做。
+4. **`data/models/lgbm_model.pkl` 是否真的能训练出来**取决于 `weekly_model_training.py`
+   的样本量；模型产出后 AI 打分才会从 `rule_based` 切到 `model`。

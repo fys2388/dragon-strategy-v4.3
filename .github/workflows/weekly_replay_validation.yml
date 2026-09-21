@@ -1,0 +1,58 @@
+# -*- coding: utf-8 -*-
+# 每周历史回放验证（策略信号有效性回归检查）。
+#
+# 为什么单独一个工作流：回放验证读的是「历史行情 + 优质股票池」，与盘中推送解耦，
+# 失败不影响交易时段推送；它属于周报类任务，不占交易时段节奏（AGENTS.md 铁律 3：
+# 交易时段工作流只留 workflow_dispatch，周报类可保留 schedule）。
+#
+# 之前的空洞：scripts/replay_validation.py 全仓库无任何工作流引用（0 调用方），
+# 代码在但从不运行，相当于策略有效性从未被周期性回归验证。
+#
+# 节奏：每周日 UTC 15:00 = 北京时间 23:00，排在训练/优化/进化三个周日任务之后。
+name: 每周历史回放验证
+
+on:
+  schedule:
+    - cron: '0 15 * * 0'  # 每周日 UTC 15:00（北京时间 23:00）
+  workflow_dispatch:
+    inputs:
+      push_feishu:
+        description: '是否推送飞书（手动触发默认不推，避免调试报告刷群）'
+        type: boolean
+        default: false
+
+jobs:
+  replay-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: 拉取仓库代码
+        uses: actions/checkout@v4
+
+      - name: 设置Python环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests pandas numpy akshare
+
+      - name: 运行历史回放验证
+        env:
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          # schedule 档推送；手动档由 push_feishu 输入决定（默认 false）
+          PUSH_FEISHU: ${{ github.event_name == 'schedule' || inputs.push_feishu }}
+          IS_CLOUD: 'true'
+        run: |
+          python scripts/replay_validation.py
+
+      - name: 上传回放日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: replay-logs-${{ github.run_id }}
+          path: |
+            data/replay_logs/
+          if-no-files-found: ignore

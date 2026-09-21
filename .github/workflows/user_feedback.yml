@@ -1,0 +1,82 @@
+# -*- coding: utf-8 -*-
+# 用户反馈录入工作流（Agent 学习闭环的输入端）。
+#
+# 为什么单独一个工作流：反馈是「用户主动给」，不是定时任务，所以只有
+# workflow_dispatch（遵守铁律：不发交易推送的工作流才允许 schedule，本工作流无 schedule）。
+#
+# 之前的空洞：user_feedback.record_feedback() 全仓库 0 调用方 →
+# data/user_feedback.jsonl 不存在 → weekly_optimization.py 的反馈分析永远输出「暂无用户反馈」。
+# 现在：GitHub Actions → Actions → User Feedback 填好输入 → 反馈落盘并提交回仓库。
+name: 用户反馈录入
+
+on:
+  workflow_dispatch:
+    inputs:
+      feedback_type:
+        description: '反馈类型（positive=正面 / negative=负面 / preference=偏好调整）'
+        type: choice
+        options:
+          - negative
+          - positive
+          - preference
+        default: negative
+      content:
+        description: '反馈内容（必填，越具体越有用，例如"推荐了但当天跌停，入场条件太松"）'
+        type: string
+      stock_code:
+        description: '相关股票代码（可选，6位数字，如 600519）'
+        type: string
+        required: false
+      stock_name:
+        description: '相关股票名称（可选，如 贵州茅台）'
+        type: string
+        required: false
+
+jobs:
+  submit-feedback:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: 拉取仓库代码
+        uses: actions/checkout@v4
+
+      - name: 设置Python环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装依赖
+        run: |
+          pip install pandas -q
+
+      - name: 录入反馈
+        env:
+          FEEDBACK_TYPE: ${{ inputs.feedback_type }}
+          FEEDBACK_CONTENT: ${{ inputs.content }}
+          FEEDBACK_CODE: ${{ inputs.stock_code || '' }}
+          FEEDBACK_NAME: ${{ inputs.stock_name || '' }}
+        run: |
+          python scripts/submit_feedback.py
+
+      - name: 提交反馈到仓库
+        # 反馈是 Agent 周度优化的输入，必须回传仓库，否则下次全新 checkout 就读不到。
+        # 注意：只判断存在性再 add，避免 git add 因路径不存在整批失败。
+        if: always()
+        run: |
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          if [ -f data/user_feedback.jsonl ]; then
+            git add data/user_feedback.jsonl
+            if git diff --cached --quiet; then
+              echo "反馈内容无变化，跳过提交"
+            else
+              git commit -m "feat: 用户反馈录入（${{ inputs.feedback_type }} / ${{ inputs.stock_code || '无个股' }}）"
+              git push
+              echo "反馈已回传仓库，周度优化将读取"
+            fi
+          else
+            echo "❌ data/user_feedback.jsonl 未生成，反馈可能未落盘"
+            exit 1
+          fi
