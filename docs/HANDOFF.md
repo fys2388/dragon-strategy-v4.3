@@ -507,11 +507,11 @@ gh workflow run "调度器健康检查" --repo fys2388/dragon-strategy-v4.3 -f a
 
 | 项 | 改前 | 改后 |
 |---|---|---|
-| 用例数 | 92 | **118** |
-| 耗时 | ~1.6s | ~1.8s |
+| 用例数 | 92 | **123**（+26 学习闭环，+5 共振闸门） |
+| 耗时 | ~1.6s | ~2.2s |
 | 真实网络请求 | 0 | **0**（新增测试全部 mock `data_source`，写盘重定向到临时目录） |
 
-> `AGENTS.md` 里的「92 passed」基线需要同步改成 118。
+> `AGENTS.md` 里的「92 passed」基线已同步改成 123（见 §9.6）。
 
 ### 9.5 仍未决（需要人工决策，本轮未动）
 
@@ -525,3 +525,40 @@ gh workflow run "调度器健康检查" --repo fys2388/dragon-strategy-v4.3 -f a
    但接入扫描链路属策略行为变更，未做。
 4. **`data/models/lgbm_model.pkl` 是否真的能训练出来**取决于 `weekly_model_training.py`
    的样本量；模型产出后 AI 打分才会从 `rule_based` 切到 `model`。
+
+### 9.6 §6.4.1 收尾：60/30min 闸门改状态型 + 闸门可观测（2026-09-22）
+
+上一轮只修了 15min 的瞬时金叉问题，**60min 与 30min 仍然是「刚发生金叉」口径**。
+上线后第一次拿到硬证据（run `35692924401`，14:00 档）：
+
+```
+初筛 1200 → 139 只 → 硬过滤 104 只 → 共振信号 0 只 → 推荐 0 只
+周期信号统计：日线零轴上方74只 | 60min金叉6只 | 30min金叉3只
+```
+
+104 只候选里 60min 瞬时金叉只有 6 只、30min 只有 3 只 —— 三个瞬时事件取交集必然为空。
+`min_score` 量纲其实不是本轮瓶颈（标准档信号恒打 3.5 分，远高过 `min_score=1.5`），
+**真正的瓶颈是闸门本身**。另外还查出打分公式是死值：
+`score = 1 + 1 + (0.5 if dif_d>0) + 0.5*TIMEFRAME_ORDER["60m"]`，
+闸门都过了就恒打 3.5，`min_score` 过滤形同虚设。
+
+**改了什么**（`config.py` / `signal_engine.py` / `scanner.py`）：
+
+| 项 | 改前 | 改后 |
+|---|---|---|
+| 60min 闸门 | `recent_golden_cross(lookback=3)` **且** DIF>0 **且** 红柱逐根放大（3 个瞬时条件） | `tf60_state_or_cross`：DIF 在零轴上方 **或** 近 8 根金叉；红柱只要为正（`require_red_bar_expanding=False`） |
+| 30min 闸门 | `recent_golden_cross(lookback=3)` | 同上，lookback 8（宽松档 12） |
+| 打分 | 硬编码恒 3.5 | 按各周期实际状态逐项累加：零轴上方 0.5 / 仅近期金叉 0.25；放量 0.5、突破 0.5，未确认各 0.25。区间 1.0–3.5，与 `min_score` 同量纲，`min_score` 重新有区分度 |
+| 可观测 | 只有一行「共振信号 0 只」 | `SignalEngine` 加带锁的 `record_gate/get_gate_counts/reset_gate_counts`，C~H 每道闸门都计数（12 线程并发）；日志打「共振闸门拒绝明细」，**0 推荐时飞书消息直接写拒因**（如「无推荐｜硬过滤后104只全部被拒：H未突破60min平台62只、G量能不足×1.2 28只」） |
+
+保留了 `tf60_state_or_cross` / `tf30_state_or_cross` / `require_red_bar_expanding`
+三个开关，想回退到旧的「必须刚金叉」口径改配置即可，不用翻代码。
+
+**仍然保留的严格项**：标准档 `require_breakout=True`（收盘价须突破近 20 根 60min 平台）、
+量比 ≥1.2。所以下一次推送仍可能 0 推荐 —— 但现在消息里会直接告诉你卡在哪道闸门，
+不用再翻 Actions 日志。这是本轮唯一没法靠静态阅读代码确定的事，需要下一次实盘观察。
+
+**测试**：`tests/test_signal_engine.py` 新增 `TestLongEntryStateBased`（5 项），
+其中 `test_bullish_state_without_fresh_cross_now_passes` 就是针对本 bug 的回归用例
+（DIF 全程高于 DEA，`recent_golden_cross` 在任意 lookback 下都为 False）；
+另 4 项覆盖闸门计数与宽松档宽回看。全量 **123 passed / 0 failed，约 2.2s**。

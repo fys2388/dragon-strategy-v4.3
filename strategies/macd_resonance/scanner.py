@@ -467,6 +467,8 @@ class Scanner:
         avoid_count = 0
         tf_stats = Counter()
         delay = threading.Event()
+        # 清空上一轮的闸门计数，本轮重新统计
+        self.engine.reset_gate_counts()
 
         def analyze(stock: dict):
             delay.wait(0.3)
@@ -496,6 +498,15 @@ class Scanner:
 
         tf_desc = " | ".join(f"{k}{v}只" for k, v in tf_stats.most_common())
         LOG.info(f"周期信号统计：{tf_desc or '无'}")
+        # 逐道闸门拒绝计数：0 推荐时直接指出是哪一道闸门把候选拒光了，
+        # 不用再靠猜（之前只有一行「共振信号 0 只」，定位全靠翻代码）。
+        gate_counts = self.engine.get_gate_counts()
+        if gate_counts:
+            gate_desc = " | ".join(f"{k}={v}" for k, v in
+                                   sorted(gate_counts.items(), key=lambda kv: -kv[1]))
+            LOG.info(f"共振闸门拒绝明细：{gate_desc}")
+        else:
+            LOG.info(f"共振闸门拒绝明细：无（所有候选都过完闸门）")
         LOG.info(f"共振信号 {len(entries)} 只，空头规避 {avoid_count} 只")
 
         # 5. 共振强度排序，按动态最低得分过滤，取前N
@@ -519,10 +530,13 @@ class Scanner:
         result["passed_count"] = len(passed)
         result["resonance_count"] = len(entries)
         result["recommend_count"] = len(final)
+        result["gate_counts"] = gate_counts
         result["summary"] = f"初筛 {len(all_stocks)} → {len(candidates)} 只 → 硬过滤 {len(passed)} 只 → 共振信号 {len(entries)} 只 → 推荐 {len(final)} 只"
+        top_gates = sorted(gate_counts.items(), key=lambda kv: -kv[1])[:3]
+        gate_hint = "、".join(f"{k}{v}只" for k, v in top_gates) if top_gates else "无"
         result["diagnosis"] = (
             f"扫描{len(all_stocks)}只 → 过滤后{len(passed)}只 → 共振通过{len(entries)}只"
-            f" | 主要拒因：{'、'.join(top_rejects) if top_rejects else '无'}"
+            f" | 主要拒因：{gate_hint if top_gates else ('、'.join(top_rejects) if top_rejects else '无')}"
         )
         LOG.info(result["summary"])
         result["scan_elapsed"] = round(time.time() - t0, 1)
@@ -542,7 +556,14 @@ def build_message(result: Dict) -> str:
             levels = "+".join(e.get("resonance_levels", []))
             lines.append(f"  {i}. {e['name']}({e['code']}) {e['price']}元 {levels} 得分{e['score']}")
     else:
-        lines.append("  无推荐")
+        # 0 推荐时给出拒因：以前只写「无推荐」，看不出是哪道闸门把候选拒光了
+        gate_counts = result.get("gate_counts") or {}
+        if gate_counts:
+            top = sorted(gate_counts.items(), key=lambda kv: -kv[1])[:3]
+            gate_hint = "、".join(f"{k}{v}只" for k, v in top)
+            lines.append(f"  无推荐｜硬过滤后{result.get('passed_count', 0)}只全部被拒：{gate_hint}")
+        else:
+            lines.append(f"  无推荐｜硬过滤后仅剩{result.get('passed_count', 0)}只")
     return "\n".join(lines)
 
 

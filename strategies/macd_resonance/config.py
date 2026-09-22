@@ -57,19 +57,39 @@ SIGNAL = {
     "breakout_lookback_60m": 20,           # 突破确认：近20根60分钟K线最高价（V2.0宽松档不强制）
     "cooldown_hours": 6,                   # 同一标的推送冷却期（小时）
     # V2.0 双模式：standard(大盘≥4分) / relaxed(大盘3分)
+    #
+    # ⚠️ 瞬时事件 vs 持续状态（2026-09-22 修正，见 docs/HANDOFF.md §6.4.1）：
+    #   MACD 金叉是瞬时事件，日线多空是持续状态。原实现要求 60/30/15min
+    #   同时处于「刚发生金叉」，多个瞬时事件在同一时段命中的概率极低。
+    #   2026-09-21 只修了 15min，60/30min 仍是瞬时口径，实测 104 只候选里
+    #   60min 金叉 6 只、30min 金叉 3 只，交集为空 → 共振仍然 0 推荐。
+    #   现在 60/30min 统一改为「多头状态（DIF 在零轴上方）或近 N 根金叉」，
+    #   仍保留多周期同向这个核心，只是不再赌多个瞬时事件撞在同一根 K 线上。
     "mode_standard": {
         "tf30_require_dif_above_zero": True,   # 30分钟要求DIF>0
         "tf15_require_cross_zero": True,       # 15分钟要求DIF在零轴上方（多头状态）
         "require_breakout": True,              # 要求价格突破
         "volume_ratio_min": 1.2,                # 标准档量比1.2
+        # 60/30min 多头状态判定：DIF>0 或近 N 根金叉，满足其一即可
+        "tf60_state_or_cross": True,
+        "tf30_state_or_cross": True,
+        "tf60_golden_lookback": 8,              # 8 根 60min ≈ 2 个交易日
+        "tf30_golden_lookback": 8,              # 8 根 30min ≈ 1 个交易日
+        # 红柱：标准档只要红柱为正（DIF>DEA，多头状态），不要求逐根放大
+        "require_red_bar_expanding": False,
     },
     "mode_relaxed": {
-        "tf30_require_dif_above_zero": False,  # 30分钟仅需金叉
+        "tf30_require_dif_above_zero": False,  # 30分钟仅需多头状态
         # 15分钟放宽为「零轴上方 或 近3根金叉」：不再要求瞬时上穿零轴
         #（瞬时事件与日线持续状态要求同时成立，是共振长期 0 推荐的成因之一）
         "tf15_require_cross_zero": False,      # 15分钟零轴上方 或 金叉
         "require_breakout": False,             # 不要求突破
         "volume_ratio_min": 1.1,                # 宽松档量比1.1
+        "tf60_state_or_cross": True,
+        "tf30_state_or_cross": True,
+        "tf60_golden_lookback": 12,             # 宽松档回看更宽（≈3 个交易日）
+        "tf30_golden_lookback": 12,
+        "require_red_bar_expanding": False,
     },
 }
 

@@ -14,7 +14,7 @@ A 股 **MACD 多周期共振**短线选股系统（日线 + 60min + 30min + 15mi
 | GitHub | `fys2388/dragon-strategy-v4.3`（public，直接推 `main`） |
 | Python | 3.12.2 本地 / 3.11 GitHub Actions |
 | 依赖 | requests, pandas, numpy, akshare（`requirements.txt`） |
-| 测试 | **118 passed / 0 failed**，约 1.8s，**全程 0 次真实网络请求** |
+| 测试 | **123 passed / 0 failed**，约 2.2s，**全程 0 次真实网络请求** |
 
 ## 2. 铁律（违反会导致推送中断或撞车）
 
@@ -100,7 +100,7 @@ knowledge/                  知识库文档
 ```bash
 # 1. 改完先编译 + 跑全量单测
 python -m py_compile scripts/v43_push.py strategies/macd_resonance/scanner.py
-python -m pytest tests -q            # 当前基线 118 passed / 0 failed，约 1.8s
+python -m pytest tests -q            # 当前基线 123 passed / 0 failed，约 2.2s
 #    出现任何 failed = 回归；耗时 >10s = 有单测在打真实行情接口（见坑 11）
 
 # 2. 提交（中文提交信息，与现有历史一致）
@@ -221,9 +221,9 @@ gh api "repos/fys2388/dragon-strategy-v4.3/contents/scripts/v43_push.py" -H "Acc
 
 ## 10. 当前状态（截至本文件写入）
 
-- 远端 `main` 已同步本地。**测试基线 118 passed / 0 failed**（全离线、0 次真实网络请求，约 1.8s）；
+- 远端 `main` 已同步本地。**测试基线 123 passed / 0 failed**（全离线、0 次真实网络请求，约 2.2s）；
   原 11 项失败的根因与修复逐项记录在 `docs/HANDOFF.md` §6.0；
-  2026-09-21 新增 26 项 Agent 学习闭环单测（`tests/test_agent_loop.py`）。
+  2026-09-21 新增 26 项 Agent 学习闭环单测（`tests/test_agent_loop.py`）；2026-09-22 新增 5 项共振闸门单测（`tests/test_signal_engine.py` `TestLongEntryStateBased`）。
 - **Agent 能力提分改造已落地（2026-09-21，详见 `docs/HANDOFF.md` §9）**：
   - P0 阻断级：完成窗口 20 交易日 → **第 3 个交易日**、样本门槛 5/10 → **3**（`loop_config.py` 唯一事实源）；
     `min_score` 量纲 40–80 → **1.0–4.0**（原量纲错位会让 MACD 共振恒 0 推荐）；

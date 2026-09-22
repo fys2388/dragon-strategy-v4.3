@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import Dict, List, Optional
+from threading import Lock
 
 import pandas as pd
 
@@ -56,6 +57,24 @@ class SignalEngine:
     def __init__(self):
         self.base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         self.portfolio_file = os.path.join(self.base_dir, "portfolio_data.json")
+        # 逐道闸门拒绝计数：12 个线程并发调用 check_long_entry，需要加锁。
+        # 之前只打印「共振信号 0 只」，看不到是哪一道闸门把候选全拒掉了，
+        # 排查只能靠猜（2026-09-22 实测就是这样：60min 金叉 6 只、30min 3 只）。
+        self._gate_counts: Dict[str, int] = {}
+        self._gate_lock = Lock()
+
+    def record_gate(self, gate: str):
+        """记录一道闸门拒绝了一个候选。"""
+        with self._gate_lock:
+            self._gate_counts[gate] = self._gate_counts.get(gate, 0) + 1
+
+    def get_gate_counts(self) -> Dict[str, int]:
+        with self._gate_lock:
+            return dict(self._gate_counts)
+
+    def reset_gate_counts(self):
+        with self._gate_lock:
+            self._gate_counts = {}
 
     # ----------------------------------------------------------
     # 持仓读取
@@ -132,41 +151,75 @@ class SignalEngine:
         reasons = []
         reasons.append(f"模式:{mode}")
 
-        # C. 日线 DIF 在零轴上方或附近
+        # C. 日线 DIF 在零轴上方或附近（持续状态）
         df_d, dif_d, dea_d, macd_d = self._tf_macd(code, "daily", 120)
         if df_d.empty:
             return None
         dif_d_last = self._last(dif_d)
         if dif_d_last is None or dif_d_last <= -ZERO_AXIS_EPS:
+            self.record_gate("C日线DIF零轴下")
             return None
         reasons.append("日线DIF零轴上方/附近")
 
-        # D. 60分钟：金叉 + DIF>0 + 红柱放大（双模式一致，核心不放松）
+        # D. 60分钟多头状态：DIF 在零轴上方 或 近 N 根金叉（不再要求瞬时金叉）
+        # ⚠️ 原实现要求 recent_golden_cross(lookback=3) + DIF>0 + 红柱逐根放大，
+        #   三个条件里两个是瞬时事件。实测 104 只候选中 60min 瞬时金叉仅 6 只，
+        #   与日线持续状态取交集后必然为空。见 docs/HANDOFF.md §6.4.1。
         df_60, dif_60, dea_60, macd_60 = self._tf_macd(code, "60m", 200)
         if df_60.empty:
             return None
-        # ★ 使用 recent_golden_cross(lookback=3)：午后扫描时，上一根已收盘
-        #   60min K 线（如 12:00-13:00）产生的金叉不会因当前正在形成的 K 线
-        #   无交叉而漏检。lookback=3 覆盖最近 3 根 60min K 线（最多 3 小时前）。
-        if not (recent_golden_cross(dif_60, dea_60, lookback=3) and self._last(dif_60) and self._last(dif_60) > 0):
-            return None
-        if not red_bar_expanding(macd_60):
-            return None
-        reasons.append("60min金叉红柱放大")
+        dif_60_last = self._last(dif_60)
+        tf60_golden = bool(recent_golden_cross(dif_60, dea_60,
+                                                lookback=mode_cfg.get("tf60_golden_lookback", 3)))
+        tf60_above_zero = bool(dif_60_last is not None and dif_60_last > 0)
+        if mode_cfg.get("tf60_state_or_cross", True):
+            # 多头状态：零轴上方 或 近 N 根金叉
+            if not (tf60_above_zero or tf60_golden):
+                self.record_gate("D60min非多头")
+                return None
+            reasons.append("60min零轴上方" if tf60_above_zero else f"60min近{mode_cfg.get('tf60_golden_lookback', 3)}根金叉")
+        else:
+            # 旧口径：必须刚发生金叉
+            if not (tf60_golden and tf60_above_zero):
+                self.record_gate("D60min非多头")
+                return None
+            reasons.append("60min金叉")
 
-        # E. 30分钟：标准档要求DIF>0，宽松档仅需金叉
+        # 红柱：标准口径要求逐根放大（瞬时），状态口径只要红柱为正（DIF>DEA）
+        macd_60_last = self._last(macd_60)
+        if mode_cfg.get("require_red_bar_expanding", False):
+            if not red_bar_expanding(macd_60):
+                self.record_gate("D60min红柱未放大")
+                return None
+            reasons.append("60min红柱放大")
+        else:
+            if macd_60_last is None or macd_60_last <= 0:
+                self.record_gate("D60min红柱未放大")
+                return None
+            reasons.append("60min红柱为正")
+
+        # E. 30分钟多头状态：同 60min，标准档偏好零轴上方，宽松档接受金叉
         df_30, dif_30, dea_30, _ = self._tf_macd(code, "30m", 200)
         if df_30.empty:
             return None
-        # ★ 同 60min：使用 recent_golden_cross 避免午后扫描漏检
-        if not recent_golden_cross(dif_30, dea_30, lookback=3):
-            return None
-        if mode_cfg["tf30_require_dif_above_zero"]:
-            if not (self._last(dif_30) and self._last(dif_30) > 0):
+        dif_30_last = self._last(dif_30)
+        tf30_golden = bool(recent_golden_cross(dif_30, dea_30,
+                                                lookback=mode_cfg.get("tf30_golden_lookback", 3)))
+        tf30_above_zero = bool(dif_30_last is not None and dif_30_last > 0)
+        if mode_cfg.get("tf30_state_or_cross", True):
+            # 标准档：零轴上方（更稳）或近 N 根金叉；宽松档同样接受二者其一
+            if not (tf30_above_zero or tf30_golden):
+                self.record_gate("E30min非多头")
                 return None
-            reasons.append("30min金叉零轴上")
+            reasons.append("30min零轴上方" if tf30_above_zero else f"30min近{mode_cfg.get('tf30_golden_lookback', 3)}根金叉")
         else:
-            reasons.append("30min金叉")
+            if not tf30_golden:
+                self.record_gate("E30min非多头")
+                return None
+            if mode_cfg["tf30_require_dif_above_zero"] and not tf30_above_zero:
+                self.record_gate("E30min非多头")
+                return None
+            reasons.append("30min金叉零轴上" if tf30_above_zero else "30min金叉")
 
         # F. 15分钟：标准档要求零轴上方，宽松档「零轴上方 或 金叉」即可
         # ★ 时间尺度错配修复（docs/HANDOFF.md §6.4.1 遗留项）：
@@ -187,41 +240,65 @@ class SignalEngine:
         if mode_cfg["tf15_require_cross_zero"]:
             # 标准档：15min DIF 必须已在零轴上方
             if not tf15_above_zero:
+                self.record_gate("F15min非多头")
                 return None
             reasons.append("15min零轴上方")
         else:
             # 宽松档：零轴上方 或 近3根金叉，满足其一即可
             if not (tf15_above_zero or tf15_golden):
+                self.record_gate("F15min非多头")
                 return None
             reasons.append("15min零轴上方" if tf15_above_zero else "15min金叉")
 
         # G. 量能确认：当日成交量 > 前5日均量 × 模式对应阈值
         if len(df_d) < 6:
+            self.record_gate("G量能数据不足")
             return None
         vol_now = float(df_d["volume"].iloc[-1])
         vol_5d = float(df_d["volume"].iloc[-6:-1].mean())
         if vol_5d <= 0 or vol_now <= vol_5d * vol_min:
+            self.record_gate(f"G量能不足×{vol_min}")
             return None
         reasons.append(f"量能{vol_now / vol_5d:.1f}倍(阈值{vol_min})")
 
         # H. 价格突破：标准档强制，宽松档跳过
         if mode_cfg["require_breakout"]:
             if len(df_60) < SIGNAL["breakout_lookback_60m"]:
+                self.record_gate("H突破数据不足")
                 return None
             close_now = float(df_d["close"].iloc[-1])
             high_20 = float(df_60["high"].iloc[-SIGNAL["breakout_lookback_60m"]:].max())
             if close_now <= high_20:
+                self.record_gate("H未突破60min平台")
                 return None
             reasons.append(f"突破60min平台{high_20:.2f}")
 
-        # 共振强度打分：共振周期越多分越高
-        score = 1.0
-        levels = ["日线", "60min", "30min", "15min"]
-        resonance = ["日线", "60min", "30min", "15min"]
-        score += 1.0  # 基础分
-        if self._last(dif_d) and self._last(dif_d) > ZERO_AXIS_EPS:
-            score += 0.5
-        score += 0.5 * TIMEFRAME_ORDER.get("60m", 3)
+        # 共振强度打分（量纲 1.0~4.0，与 adaptive_config.min_score 同口径）
+        # ⚠️ 2026-09-22 重写：原打分硬编码「60min 共振 +1.5」，
+        #   但闸门已改成状态型（零轴上方 或 近期金叉），两个都算通过——
+        #   于是无论实际共振多弱，标准档信号都恒打 3.5 分，min_score 过滤形同虚设。
+        #   现在按各周期**实际确认到的状态**逐项加分：
+        #   - 零轴上方（真多头状态）= 0.5，仅近期金叉（较弱）= 0.25
+        #   - 放量 / 突破 各 0.5，未确认各 0.25
+        score = 1.0  # 基础分：日线多头（C 闸门已通过）
+        resonance = ["日线"]
+        for label, above_zero, golden in (
+            ("60min", tf60_above_zero, tf60_golden),
+            ("30min", tf30_above_zero, tf30_golden),
+            ("15min", tf15_above_zero, tf15_golden),
+        ):
+            if above_zero:
+                score += 0.5
+                resonance.append(f"{label}零轴上")
+            else:
+                score += 0.25
+                resonance.append(f"{label}近期金叉")
+
+        vol_ratio_val = vol_now / vol_5d if vol_5d > 0 else 0.0
+        score += 0.5 if vol_ratio_val >= 1.5 else 0.25
+
+        if mode_cfg["require_breakout"]:
+            score += 0.5  # H 闸门已通过：价格突破 60min 平台
         if mode == "relaxed":
             score *= 0.9  # 宽松档信号略降权
 
@@ -231,6 +308,9 @@ class SignalEngine:
             dif_daily=dif_d_last, dif_60m=self._last(dif_60),
             dif_30m=self._last(dif_30), dif_15m=self._last(dif_15),
             resonance_levels=resonance,
+            tf_status={"daily_above_zero": True, "tf60_golden": tf60_golden,
+                       "tf30_golden": tf30_golden, "tf15_cross_zero": tf15_above_zero,
+                       "tf60_above_zero": tf60_above_zero, "tf30_above_zero": tf30_above_zero},
         )
 
     # ----------------------------------------------------------

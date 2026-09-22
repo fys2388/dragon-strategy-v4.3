@@ -28,6 +28,130 @@ def make_kline_df(n=80):
     return df
 
 
+def make_bull_state(n=25, last_close=10.0, last_vol=300.0, base_vol=100.0):
+    """日线 K 线：最后一天放量，且收盘价突破前 20 根 60min 平台。"""
+    closes = [last_close - (n - 1 - i) * 0.01 for i in range(n)]
+    return pd.DataFrame({
+        "datetime": pd.date_range("2026-01-01", periods=n, freq="D"),
+        "open": closes, "close": closes,
+        # 60min 平台全部低于当前收盘价 → H 闸门（突破）成立
+        "high": [last_close - 0.5] * n,
+        "low": [c - 0.1 for c in closes],
+        "volume": [base_vol] * (n - 1) + [last_vol],
+        "amount": [1e6] * n,
+    })
+
+
+def make_macd_state(n=25, dif_start=0.5, dea_start=0.1, step=0.01):
+    """持续多头状态：DIF 全程高于 DEA 且为正。
+
+    关键点：全程 DIF>DEA，所以 recent_golden_cross 在任意 lookback 下都是 False
+    —— 即「很久以前就已经金叉、现在处于多头状态」，而不是「刚发生金叉」。
+    """
+    dif = [dif_start + step * i for i in range(n)]
+    dea = [dea_start + step * i for i in range(n)]
+    macd = [(d - e) * 2 for d, e in zip(dif, dea)]
+    return pd.Series(dif, dtype=float), pd.Series(dea, dtype=float), pd.Series(macd, dtype=float)
+
+
+class TestLongEntryStateBased(unittest.TestCase):
+    """2026-09-22 修复验证：60/30min 闸门从「瞬时金叉」改成「多头状态」。
+
+    线上实测（run 35692924401，14:00 档）104 只候选：
+        日线零轴上方 74 只 | 60min 金叉 6 只 | 30min 金叉 3 只
+    三个瞬时事件取交集必然为空 → 共振长期 0 推荐。
+    """
+
+    def setUp(self):
+        self.engine = se_mod.SignalEngine()
+        self.engine.base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def _patch_macd(self, dif_start=0.5, dea_start=0.1):
+        """让所有周期都返回「持续多头但无新近金叉」的序列。"""
+        df = make_bull_state()
+        dif, dea, macd = make_macd_state(dif_start=dif_start, dea_start=dea_start)
+        return mock.patch.object(self.engine, "_tf_macd",
+                                 return_value=(df.copy(), dif, dea, macd))
+
+    def test_bullish_state_without_fresh_cross_now_passes(self):
+        """零轴上方 + 红柱为正 + 放量 + 突破，但没有新近金叉 → 应给出做多信号。
+
+        旧实现在这里 return None（要求 recent_golden_cross(lookback=3)），
+        正是线上 0 推荐的成因。
+        """
+        with self._patch_macd():
+            self.engine.reset_gate_counts()
+            sig = self.engine.check_long_entry("600519", "测试", 10.0, mode="standard")
+
+        self.assertIsNotNone(sig, "持续多头状态应通过闸门")
+        self.assertEqual(sig.signal_type, SignalType.LONG_ENTRY)
+        # 状态型闸门：得分来自各周期实际确认到的状态，量纲 1.0~4.0
+        self.assertGreater(sig.score, 1.0)
+        self.assertLessEqual(sig.score, 4.0)
+        # 没有新近金叉，reason 里应体现走的是「零轴上方」而非「金叉」
+        self.assertIn("零轴上方", sig.reason)
+        self.assertEqual(self.engine.get_gate_counts(), {},
+                         "全部通过时不应有闸门拒绝记录")
+
+    def test_gate_counter_records_daily_dif_rejection(self):
+        """日线 DIF 在零轴下方 → 拒因必须被计数，而不是只报一行「0 只」。"""
+        # ZERO_AXIS_EPS=0.05，DIF 必须跌破 -0.05 才算「零轴下方」
+        dif, dea, macd = make_macd_state(dif_start=-0.1, dea_start=-0.2, step=0.001)
+        df = make_bull_state()
+        with mock.patch.object(self.engine, "_tf_macd", return_value=(df, dif, dea, macd)):
+            self.engine.reset_gate_counts()
+            sig = self.engine.check_long_entry("600519", "测试", 10.0, mode="standard")
+
+        self.assertIsNone(sig)
+        counts = self.engine.get_gate_counts()
+        self.assertIn("C日线DIF零轴下", counts)
+        self.assertEqual(counts["C日线DIF零轴下"], 1)
+
+    def test_gate_counter_records_volume_rejection(self):
+        """量能不足也要被计数。"""
+        df = make_bull_state(last_vol=101.0, base_vol=100.0)  # 1.01 倍 < 1.2
+        dif, dea, macd = make_macd_state()
+        with mock.patch.object(self.engine, "_tf_macd", return_value=(df, dif, dea, macd)):
+            self.engine.reset_gate_counts()
+            sig = self.engine.check_long_entry("600519", "测试", 10.0, mode="standard")
+
+        self.assertIsNone(sig)
+        self.assertTrue(any(k.startswith("G量能") for k in self.engine.get_gate_counts()))
+
+    def test_relaxed_mode_accepts_older_cross(self):
+        """宽松档回看窗口更宽：近 10 根前的金叉仍算数（标准档 lookback=8 会漏）。"""
+        n = 25
+        # DIF 在第 13 根刚上穿 DEA，之后保持多头；最近 8 根内没有新金叉
+        dea = [0.1 + 0.005 * i for i in range(n)]
+        dif = [dea[i] - 0.05 for i in range(13)] + \
+              [dea[i] + 0.02 for i in range(13, n)]
+        macd = [(d - e) * 2 for d, e in zip(dif, dea)]
+        df = make_bull_state()
+        with mock.patch.object(self.engine, "_tf_macd",
+                               return_value=(df, pd.Series(dif), pd.Series(dea), pd.Series(macd))):
+            self.engine.reset_gate_counts()
+            relaxed = self.engine.check_long_entry("600519", "测试", 10.0, mode="relaxed")
+
+        self.assertIsNotNone(relaxed)
+        self.assertEqual(relaxed.signal_type, SignalType.LONG_ENTRY)
+
+    def test_fresh_cross_on_last_bar_also_passes(self):
+        """最后一根刚发生金叉的情形同样通过（新旧口径都覆盖）。"""
+        n = 25
+        # 只在最后一根发生金叉 → 旧口径通过、状态口径也通过
+        dea = [0.1 + 0.005 * i for i in range(n)]
+        dif = [dea[i] + 0.05 for i in range(n - 1)] + [dea[-1] + 0.1]
+        macd = [(d - e) * 2 for d, e in zip(dif, dea)]
+        df = make_bull_state()
+        with mock.patch.object(self.engine, "_tf_macd",
+                               return_value=(df, pd.Series(dif), pd.Series(dea), pd.Series(macd))):
+            self.engine.reset_gate_counts()
+            sig = self.engine.check_long_entry("600519", "测试", 10.0, mode="standard")
+        self.assertIsNotNone(sig)
+        self.assertEqual(sig.signal_type, SignalType.LONG_ENTRY)
+
+
+
 def make_market_data():
     """构造数据自驱层的 MarketData 快照（供扫描器集成测试 mock）。"""
     from strategies.macd_resonance.data_validator import MarketData
