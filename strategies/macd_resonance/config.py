@@ -66,28 +66,41 @@ SIGNAL = {
     #   现在 60/30min 统一改为「多头状态（DIF 在零轴上方）或近 N 根金叉」，
     #   仍保留多周期同向这个核心，只是不再赌多个瞬时事件撞在同一根 K 线上。
     "mode_standard": {
-        "tf30_require_dif_above_zero": True,   # 30分钟要求DIF>0
-        "tf15_require_cross_zero": True,       # 15分钟要求DIF在零轴上方（多头状态）
-        "require_breakout": True,              # 要求价格突破
-        "volume_ratio_min": 1.2,                # 标准档量比1.2
-        # 60/30min 多头状态判定：DIF>0 或近 N 根金叉，满足其一即可
+        # ⚠️ 2026-09-22 重设计：共振 = "趋势延续"，不再要求突破。
+        #   原设计 require_breakout=True 与四周期共振（滞后确认）+ 突破 5 日新高
+        #   （领先确认）在时间上互相排斥：四周期都同向的股票价格已经在高位，
+        #   几乎不可能再创新高。实测 14:45 档 15 只通过 D/E/F 的候选被 H 闸门 15/15
+        #   全灭（0% 通过率），这个逻辑冲突是共振长期 0 推荐的最后一层根因。
+        #   现在把突破职责完全交给 breakout.py，共振只做趋势延续。
+        #
+        # 60/30/15min 全部放宽为「DIF>DEA 即算多头」（不再要求零轴上方）：
+        #   零轴判定在分钟级过于苛刻。日线 DIF>0 已经足够保证「大方向多头」，
+        #   分钟级的作用只是确认「短期动能未逆」，DIF>DEA 就是这个含义。
+        "tf30_require_dif_above_zero": False,   # 30分钟：只要 DIF>DEA（多头状态）
+        "tf15_require_cross_zero": False,       # 15分钟：只要 DIF>DEA
+        "require_breakout": False,              # 不要求突破（交给趋势突破策略）
+        "volume_ratio_min": 1.2,                # 量比区间下限（配合 volume_ratio_max 用）
+        "volume_ratio_max": 3.0,                # 量比区间上限：排除爆量出货（≥3× 常见于出货）
+        # 至少 2 个分钟周期（60/30/15）多头，明写多周期共振这个核心条件
+        "min_bull_minute_tfs": 2,
+        # 保留 state_or_cross 与 lookback 字段（虽不主动用，但向后兼容旧数据）
         "tf60_state_or_cross": True,
         "tf30_state_or_cross": True,
-        "tf60_golden_lookback": 8,              # 8 根 60min ≈ 2 个交易日
-        "tf30_golden_lookback": 8,              # 8 根 30min ≈ 1 个交易日
-        # 红柱：标准档只要红柱为正（DIF>DEA，多头状态），不要求逐根放大
+        "tf60_golden_lookback": 8,
+        "tf30_golden_lookback": 8,
         "require_red_bar_expanding": False,
     },
     "mode_relaxed": {
-        "tf30_require_dif_above_zero": False,  # 30分钟仅需多头状态
-        # 15分钟放宽为「零轴上方 或 近3根金叉」：不再要求瞬时上穿零轴
-        #（瞬时事件与日线持续状态要求同时成立，是共振长期 0 推荐的成因之一）
-        "tf15_require_cross_zero": False,      # 15分钟零轴上方 或 金叉
-        "require_breakout": False,             # 不要求突破
-        "volume_ratio_min": 1.1,                # 宽松档量比1.1
+        # 宽松档：进一步放宽到至少 1 个分钟周期多头，量比区间收窄到 0.8-2.5
+        "tf30_require_dif_above_zero": False,
+        "tf15_require_cross_zero": False,
+        "require_breakout": False,
+        "volume_ratio_min": 1.0,
+        "volume_ratio_max": 2.5,
+        "min_bull_minute_tfs": 1,
         "tf60_state_or_cross": True,
         "tf30_state_or_cross": True,
-        "tf60_golden_lookback": 12,             # 宽松档回看更宽（≈3 个交易日）
+        "tf60_golden_lookback": 12,
         "tf30_golden_lookback": 12,
         "require_red_bar_expanding": False,
     },

@@ -119,21 +119,55 @@ class TestLongEntryStateBased(unittest.TestCase):
         self.assertTrue(any(k.startswith("G量能") for k in self.engine.get_gate_counts()))
 
     def test_relaxed_mode_accepts_older_cross(self):
-        """宽松档回看窗口更宽：近 10 根前的金叉仍算数（标准档 lookback=8 会漏）。"""
+        """宽松档：min_bull_minute_tfs=1，只要 1 个分钟周期多头就通过。
+
+        ⚠️ 2026-09-22 重设计后语义变更：原测试检验「近 N 根前的金叉仍算数」
+        的 lookback 窗口机制。新设计改为按分钟周期多头计数（min_bull_minute_tfs），
+        不再有"近 N 根金叉"的概念——多头 = DIF > DEA 的当前状态，不区分新鲜度。
+        因此本测试改为检验：relaxed 档（min=1）比 standard 档（min=2）
+        接受更弱的分钟周期组合。
+        """
+        # 构造：日线多头；60min DIF>DEA（多头），30min/15min DIF<DEA（空头）
+        # → bull_minute_tfs=1，relaxed 通过，standard 拒绝
         n = 25
-        # DIF 在第 13 根刚上穿 DEA，之后保持多头；最近 8 根内没有新金叉
-        dea = [0.1 + 0.005 * i for i in range(n)]
-        dif = [dea[i] - 0.05 for i in range(13)] + \
-              [dea[i] + 0.02 for i in range(13, n)]
-        macd = [(d - e) * 2 for d, e in zip(dif, dea)]
-        df = make_bull_state()
-        with mock.patch.object(self.engine, "_tf_macd",
-                               return_value=(df, pd.Series(dif), pd.Series(dea), pd.Series(macd))):
+        dea_bull = [0.1 + 0.005 * i for i in range(n)]       # 60min: 多头
+        dif_bull = [dea_bull[i] + 0.02 for i in range(n)]     # DIF > DEA
+        dea_bear = [0.1 - 0.005 * i for i in range(n)]        # 30/15min: 空头
+        dif_bear = [dea_bear[i] - 0.02 for i in range(n)]     # DIF < DEA
+        macd_bull = [(d - e) * 2 for d, e in zip(dif_bull, dea_bull)]
+        macd_bear = [(d - e) * 2 for d, e in zip(dif_bear, dea_bear)]
+
+        # daily: DIF 在零轴上方（+0.1）；60min: DIF>DEA；30/15min: DIF<DEA
+        # ⚠️ 量比必须落在 [vol_min, vol_max] 区间：relaxed 档 vol_max=2.5，
+        # standard 档 vol_max=3.0，所以选 vol_ratio=2.0 让两档都通过 G 闸门。
+        df_daily = make_bull_state(last_vol=200.0, base_vol=100.0)
+        df_min = make_bull_state(last_vol=200.0, base_vol=100.0)
+
+        def fake_tf_macd(code, period, count):
+            if period == "daily":
+                # 日线：DIF=0.1（零轴上），DEA=0.08（比 DIF 小），MACD=0.04
+                dif = pd.Series([0.1] * 120)
+                dea = pd.Series([0.08] * 120)
+                macd = pd.Series([0.04] * 120)
+                return df_daily, dif, dea, macd
+            if period == "60m":
+                return df_min, pd.Series(dif_bull), pd.Series(dea_bull), pd.Series(macd_bull)
+            # 30m 和 15m 都是空头
+            return df_min, pd.Series(dif_bear), pd.Series(dea_bear), pd.Series(macd_bear)
+
+        with mock.patch.object(self.engine, "_tf_macd", side_effect=fake_tf_macd):
             self.engine.reset_gate_counts()
             relaxed = self.engine.check_long_entry("600519", "测试", 10.0, mode="relaxed")
+            self.engine.reset_gate_counts()
+            standard = self.engine.check_long_entry("600519", "测试", 10.0, mode="standard")
 
+        # relaxed 通过（min_bull_minute_tfs=1，只有 60min 一个多头也够）
         self.assertIsNotNone(relaxed)
         self.assertEqual(relaxed.signal_type, SignalType.LONG_ENTRY)
+        # standard 拒绝（min_bull_minute_tfs=2，只有 1 个不够）
+        self.assertIsNone(standard)
+        self.assertTrue(any(k.startswith("I分钟多头不足")
+                            for k in self.engine.get_gate_counts()))
 
     def test_fresh_cross_on_last_bar_also_passes(self):
         """最后一根刚发生金叉的情形同样通过（新旧口径都覆盖）。"""

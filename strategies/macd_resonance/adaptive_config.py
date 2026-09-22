@@ -22,44 +22,48 @@ OPTIMIZED_PARAMS_FILE = os.path.join(BASE_DIR, "data", "optimized_params.json")
 
 # MACD多周期共振参数
 #
-# ⚠️ min_score 的口径（2026-09-21 修正，属于真实 bug 修复）：
-#   signal_engine.SignalEngine.check_long_entry() 的评分量纲是 1.0~4.0
-#   （基础 1 + 命中 1 + 日线零轴上方 0.5 + 60min 0.5×3，宽松档再 ×0.9），
+# ⚠️ min_score 的口径（2026-09-22 二次重写，量纲 1.0~3.05）：
+#   2026-09-22 重设计：共振 = "趋势延续"，不再要求突破。
+#   signal_engine.check_long_entry 的评分量纲改为 1.0~3.05（基础 1.0
+#   + 60min 0.5 + 30min 0.4 + 15min 0.3 + 量比 0.3 + 无顶背离 0.1），
 #   而 scanner.run() 用 adaptive_params["min_score"] 做过滤。
 #   原配置把 min_score 写成 40~80（那是 breakout 的百分制口径），
-#   导致 4.0 的满分信号永远 < 40，共振推荐被结构性清零——
-#   这是「共振长期 0 推荐」的真根因，不只是四周期交集太苛刻。
-#   现已改为 1.0~4.0 量纲，并按市场环境从宽到严排列。
+#   导致信号永远 < 40，共振推荐被结构性清零——这是「共振长期 0 推荐」
+#   的独立根因。现已改为 1.0~3.05 量纲，并按市场环境从宽到严排列：
+#     牛市：min_score=2.0（日线多头 1.0 + 至少 60min 零轴上 0.5 + 30min 零轴上 0.4 = 1.9，
+#                                       加量比健康 0.3 达到 2.2，正好在阈值上）
+#     熊市：min_score=2.5（更严，要求更多周期零轴确认）
+#     极端：min_score=2.8（近乎全套确认）
 MACD_PARAMS = {
     "bull_market": {
         "name": "牛市配置",
-        "daily_dif_floor": -0.02,       # 日线DIF下限（放宽，允许零轴附近）
-        "require_tf15_cross_zero": False,  # 不强制15min上穿零轴
-        "require_tf30_golden": True,     # 30min金叉
-        "require_tf60_golden": True,     # 60min金叉
-        "amplitude_20d_max": 50.0,       # 20日振幅上限放宽到50%
-        "min_score": 1.5,                # 共振评分门槛（量纲1.0~4.0）：牛市放宽
-        "max_recommendations": 5,
-        "position_pct": 0.35,            # 单票仓位35%
+        "daily_dif_floor": -0.02,
+        "require_tf15_cross_zero": False,
+        "require_tf30_golden": True,
+        "require_tf60_golden": True,
+        "amplitude_20d_max": 50.0,
+        "min_score": 2.0,
+        "max_recommendations": 3,
+        "position_pct": 0.35,
         "max_positions": 3,
-        "take_profit_1_pct": 0.12,       # 止盈1 12%
-        "take_profit_2_pct": 0.20,       # 止盈2 20%
-        "stop_loss_pct": 0.06,           # 止损6%
+        "take_profit_1_pct": 0.12,
+        "take_profit_2_pct": 0.20,
+        "stop_loss_pct": 0.06,
     },
     "bear_market": {
         "name": "熊市配置",
-        "daily_dif_floor": 0.05,         # 日线DIF必须在零轴上方
-        "require_tf15_cross_zero": True,  # 强制15min上穿零轴
+        "daily_dif_floor": 0.05,
+        "require_tf15_cross_zero": True,
         "require_tf30_golden": True,
         "require_tf60_golden": True,
-        "amplitude_20d_max": 35.0,       # 20日振幅收紧到35%
-        "min_score": 2.5,                # 熊市收严：要求更完整的共振
+        "amplitude_20d_max": 35.0,
+        "min_score": 2.5,
         "max_recommendations": 3,
-        "position_pct": 0.20,            # 单票仓位20%
+        "position_pct": 0.20,
         "max_positions": 2,
-        "take_profit_1_pct": 0.08,       # 止盈1 8%
-        "take_profit_2_pct": 0.12,       # 止盈2 12%
-        "stop_loss_pct": 0.04,           # 止损4%
+        "take_profit_1_pct": 0.08,
+        "take_profit_2_pct": 0.12,
+        "stop_loss_pct": 0.04,
     },
     "strong_rebound": {
         "name": "强反弹配置",
@@ -68,8 +72,8 @@ MACD_PARAMS = {
         "require_tf30_golden": True,
         "require_tf60_golden": True,
         "amplitude_20d_max": 45.0,
-        "min_score": 1.5,
-        "max_recommendations": 5,
+        "min_score": 2.0,
+        "max_recommendations": 3,
         "position_pct": 0.30,
         "max_positions": 3,
         "take_profit_1_pct": 0.10,
@@ -83,7 +87,7 @@ MACD_PARAMS = {
         "require_tf30_golden": True,
         "require_tf60_golden": True,
         "amplitude_20d_max": 40.0,
-        "min_score": 2.0,
+        "min_score": 2.2,
         "max_recommendations": 3,
         "position_pct": 0.25,
         "max_positions": 2,
@@ -98,7 +102,7 @@ MACD_PARAMS = {
         "require_tf30_golden": True,
         "require_tf60_golden": True,
         "amplitude_20d_max": 30.0,
-        "min_score": 3.0,
+        "min_score": 2.8,
         "max_recommendations": 2,
         "position_pct": 0.15,
         "max_positions": 1,
@@ -108,46 +112,76 @@ MACD_PARAMS = {
     },
 }
 
-# 超跌反弹参数
+# 超跌反弹参数（2026-09-22 拆两种口径）
+#
+# ⚠️ 2026-09-22 重设计：拆「真超跌」（熊市用）与「趋势回调」（牛市用）两套。
+#   原设计在牛市强制要求 20 日跌幅 ≥20%（drop_20d_min=20），
+#   但 bull_market 环境下结构性不存在——全市场都在涨，没有股票 20 日跌 20%。
+#   实测 run 35696267711：初筛 120 只，超跌条件 0 只（100% 被 drop_20d_min 拒掉）。
+#   现在 bull_market 改用「从 20 日高点回调 8%~15%」口径（趋势回调买入），
+#   熊市仍走「20 日跌幅 ≥25%」的真超跌口径。
+#   drop_20d_min 字段在牛市配为 0（不做跌幅下限过滤，改用 drop_from_20d_high_min/max 区间）。
 OVERSOLD_PARAMS = {
     "bull_market": {
-        "name": "牛市超跌配置",
-        "drop_20d_min": 20.0,            # 超跌要求降低（牛市跌20%就算超跌）
-        "today_gain_min": 3.0,           # 启动涨幅降低
-        "volume_ratio_min": 1.5,         # 量比要求降低
-        "daily_dif_floor": -1.0,         # DIF下限放宽
-        "max_recommendations": 5,
+        "name": "牛市回调配置",
+        # 牛市不做跌幅下限过滤（drop_20d_min=0 意味着任何跌幅都过）
+        "drop_20d_min": 0.0,
+        # 从 20 日高点回调 8%~15%（趋势回调买入，不是真超跌）
+        "drop_from_20d_high_min": 8.0,
+        "drop_from_20d_high_max": 20.0,
+        "pullback_days": 3,          # 回调至少 3 天
+        "pullback_days_max": 8,      # 回调不超过 8 天（避免趋势走坏）
+        "volume_shrink_min": 0.6,    # 回调期量比 ≥0.6（缩量确认）
+        "today_gain_min": 2.0,       # 今天重新放量反弹 +2%
+        "volume_ratio_min": 1.5,     # 反弹日量比 ≥1.5
+        "daily_dif_floor": -1.0,
+        "max_recommendations": 3,
         "position_pct": 0.35,
         "take_profit_pct": 0.15,
         "stop_loss_pct": 0.06,
     },
     "bear_market": {
-        "name": "熊市超跌配置",
-        "drop_20d_min": 35.0,            # 超跌要求提高（熊市要跌更多）
-        "today_gain_min": 5.0,           # 启动涨幅提高
-        "volume_ratio_min": 2.5,         # 量比要求提高
-        "daily_dif_floor": -0.5,         # DIF下限收紧
+        "name": "熊市真超跌配置",
+        "drop_20d_min": 25.0,        # 20 日跌幅 ≥25%（真超跌）
+        "drop_from_20d_high_min": 0.0,
+        "drop_from_20d_high_max": 100.0,  # 熊市不设高点回调区间限制
+        "pullback_days": 5,
+        "pullback_days_max": 999,
+        "volume_shrink_min": 0.0,    # 熊市不做缩量要求
+        "today_gain_min": 4.0,       # 启动涨幅更高（4%）
+        "volume_ratio_min": 1.8,
+        "daily_dif_floor": -0.5,
         "max_recommendations": 3,
         "position_pct": 0.20,
         "take_profit_pct": 0.10,
         "stop_loss_pct": 0.04,
     },
     "strong_rebound": {
-        "name": "强反弹超跌配置",
-        "drop_20d_min": 25.0,
-        "today_gain_min": 3.5,
-        "volume_ratio_min": 1.8,
+        "name": "强反弹配置",
+        "drop_20d_min": 15.0,
+        "drop_from_20d_high_min": 6.0,
+        "drop_from_20d_high_max": 18.0,
+        "pullback_days": 3,
+        "pullback_days_max": 8,
+        "volume_shrink_min": 0.6,
+        "today_gain_min": 3.0,
+        "volume_ratio_min": 1.6,
         "daily_dif_floor": -0.8,
-        "max_recommendations": 5,
+        "max_recommendations": 3,
         "position_pct": 0.30,
         "take_profit_pct": 0.12,
         "stop_loss_pct": 0.05,
     },
     "sideways": {
-        "name": "震荡市超跌配置",
-        "drop_20d_min": 30.0,
-        "today_gain_min": 4.0,
-        "volume_ratio_min": 2.0,
+        "name": "震荡市配置",
+        "drop_20d_min": 18.0,
+        "drop_from_20d_high_min": 8.0,
+        "drop_from_20d_high_max": 20.0,
+        "pullback_days": 3,
+        "pullback_days_max": 8,
+        "volume_shrink_min": 0.6,
+        "today_gain_min": 3.5,
+        "volume_ratio_min": 1.8,
         "daily_dif_floor": -0.6,
         "max_recommendations": 3,
         "position_pct": 0.25,
@@ -155,10 +189,15 @@ OVERSOLD_PARAMS = {
         "stop_loss_pct": 0.05,
     },
     "extreme": {
-        "name": "极端行情超跌配置",
-        "drop_20d_min": 40.0,
-        "today_gain_min": 6.0,
-        "volume_ratio_min": 3.0,
+        "name": "极端行情配置",
+        "drop_20d_min": 30.0,
+        "drop_from_20d_high_min": 0.0,
+        "drop_from_20d_high_max": 100.0,
+        "pullback_days": 5,
+        "pullback_days_max": 999,
+        "volume_shrink_min": 0.0,
+        "today_gain_min": 5.0,
+        "volume_ratio_min": 2.5,
         "daily_dif_floor": -0.3,
         "max_recommendations": 2,
         "position_pct": 0.15,

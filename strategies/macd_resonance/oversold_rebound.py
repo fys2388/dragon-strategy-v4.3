@@ -82,13 +82,23 @@ class OversoldReboundScanner:
         self._save_cache()
 
     def _calc_oversold_metrics(self, stock: dict) -> dict:
-        """计算超跌指标：20日跌幅、近5日振幅、当日涨幅、量比。"""
+        """计算超跌/回调指标。
+
+        兼容两种口径（由 adaptive_params 决定）：
+        - 真超跌（熊市）：drop_20d_pct = (20 日前收盘 - 最新收盘) / 20 日前收盘 * 100
+        - 趋势回调（牛市）：drop_from_20d_high_pct = (20 日高点 - 最新收盘) / 20 日高点 * 100
+
+        两者都算，下游按 cfg 决定用哪一个作为过滤条件。
+        """
         df = ds.get_kline_daily(stock["code"], count=30)
         if df.empty or len(df) < 25:
             stock["drop_20d_pct"] = 0.0
+            stock["drop_from_20d_high_pct"] = 0.0
             stock["consolidate_amp_pct"] = 999.0
             stock["today_gain_pct"] = 0.0
             stock["volume_ratio"] = 0.0
+            stock["pullback_days"] = 0
+            stock["pullback_vol_ratio"] = 0.0
             return stock
 
         closes = df["close"].astype(float)
@@ -96,7 +106,7 @@ class OversoldReboundScanner:
         lows = df["low"].astype(float)
         volumes = df["volume"].astype(float)
 
-        # 20日跌幅：(20日前收盘 - 最新收盘) / 20日前收盘 * 100
+        # 20日跌幅（真超跌口径）
         if len(closes) >= 21:
             base_20d = float(closes.iloc[-21])
             latest = float(closes.iloc[-1])
@@ -106,6 +116,14 @@ class OversoldReboundScanner:
                 stock["drop_20d_pct"] = 0.0
         else:
             stock["drop_20d_pct"] = 0.0
+
+        # 20日高点回调（趋势回调口径）：从 20 日最高价回落的百分比
+        high_20d = float(highs.iloc[-20:].max())
+        latest = float(closes.iloc[-1])
+        if high_20d > 0:
+            stock["drop_from_20d_high_pct"] = (high_20d - latest) / high_20d * 100.0
+        else:
+            stock["drop_from_20d_high_pct"] = 0.0
 
         # 近5日振幅（筑底确认）
         n = OVERSOLD_REBOUND["consolidate_days"]
@@ -142,7 +160,48 @@ class OversoldReboundScanner:
         else:
             stock["volume_ratio"] = 0.0
 
+        # 回调天数：从 20 日高点到今天的连续下跌/横盘天数
+        # 定义：从 20 日最高点当日开始，close 连续 ≤ 高点 * (1 - 0.02) 的天数
+        stock["pullback_days"] = self._calc_pullback_days(closes, high_20d)
+
+        # 回调期平均量比：从回调起点到今天（不含今日）的平均量 / 今日前的 5 日均量
+        # 简化：用回调期成交量均值 / 前 20 日成交量均值
+        stock["pullback_vol_ratio"] = self._calc_pullback_vol_ratio(
+            volumes, stock.get("pullback_days", 0))
+
         return stock
+
+    @staticmethod
+    def _calc_pullback_days(closes, high_20d: float) -> int:
+        """从 20 日高点当日开始，计算 close 持续低于高点 -2% 的天数。"""
+        if high_20d <= 0 or len(closes) < 3:
+            return 0
+        threshold = high_20d * 0.98
+        days = 0
+        for i in range(len(closes) - 1, max(-1, len(closes) - 21), -1):
+            if float(closes.iloc[i]) <= threshold:
+                days += 1
+            else:
+                break
+        return days
+
+    @staticmethod
+    def _calc_pullback_vol_ratio(volumes, pullback_days: int) -> float:
+        """回调期平均量 / 前 20 日均量。回调期定义为最近 pullback_days 天（不含今日）。"""
+        if pullback_days <= 0 or len(volumes) < 6:
+            return 0.0
+        # 回调期：今天之前 pullback_days 天的平均量
+        pb_start = max(-1 - pullback_days, -len(volumes) - 1)
+        pb_slice = volumes.iloc[pb_start:-1] if pullback_days < len(volumes) else volumes.iloc[:-1]
+        if len(pb_slice) == 0:
+            return 0.0
+        pb_avg = float(pb_slice.mean())
+        # 基准：前 20 日（不含回调期与今日）的平均量
+        ref_end = -1 - pullback_days if pullback_days < len(volumes) else -1
+        ref_slice = volumes.iloc[max(-1, ref_end - 20):ref_end]
+        if len(ref_slice) == 0 or float(ref_slice.mean()) <= 0:
+            return 0.0
+        return pb_avg / float(ref_slice.mean())
 
     def _quick_filter(self, stock: dict) -> bool:
         """初筛：价格、市值、非ST、主板、优质股票池。"""
@@ -186,7 +245,14 @@ class OversoldReboundScanner:
             market_data = None
         regime = get_current_regime(market_data)
         adaptive_params = get_oversold_params(regime)
-        for key in ['drop_20d_min', 'today_gain_min', 'volume_ratio_min', 'daily_dif_floor', 'max_recommendations']:
+        # ⚠️ 覆盖字段必须与 adaptive_config.OVERSOLD_PARAMS 保持同步：
+        # 新增字段（drop_from_20d_high_min/max、pullback_days/max、volume_shrink_min）
+        # 如果不加入这个覆盖列表，牛市回调口径就不会生效，实测 bull_market 里 100% 被 drop_20d_min=0
+        # 拒掉（因为 drop_20d_min 覆盖了原 OVERSOLD_REBOUND 里的 25.0）。
+        for key in ['drop_20d_min', 'drop_from_20d_high_min', 'drop_from_20d_high_max',
+                    'pullback_days', 'pullback_days_max', 'volume_shrink_min',
+                    'today_gain_min', 'volume_ratio_min', 'daily_dif_floor',
+                    'max_recommendations']:
             if key in adaptive_params:
                 cfg[key] = adaptive_params[key]
 
@@ -238,24 +304,56 @@ class OversoldReboundScanner:
         with ThreadPoolExecutor(max_workers=12) as pool:
             enriched = list(pool.map(self._calc_oversold_metrics, candidates))
 
-        # 4. 超跌条件过滤
+        # 4. 超跌/回调条件过滤
+        # ⚠️ 2026-09-22 重设计：支持两种口径，由 adaptive_params 决定：
+        #   - 熊市（drop_from_20d_high_min=0, high_max=100）：走「真超跌」口径，只看 drop_20d_min
+        #   - 牛市（drop_20d_min=0, high_min=8, high_max=20）：走「趋势回调」口径，
+        #     看 drop_from_20d_high_pct 是否在 [high_min, high_max] 区间
         oversold = []
         reject_reasons = Counter()
+        high_min = float(cfg.get("drop_from_20d_high_min", 0))
+        high_max = float(cfg.get("drop_from_20d_high_max", 100))
+        pb_min = int(cfg.get("pullback_days", 0))
+        pb_max = int(cfg.get("pullback_days_max", 999))
+        vol_shrink_min = float(cfg.get("volume_shrink_min", 0))
+
         for s in enriched:
             drop = float(s.get("drop_20d_pct", 0))
+            high_drop = float(s.get("drop_from_20d_high_pct", 0))
             amp = float(s.get("consolidate_amp_pct", 999))
             gain = float(s.get("today_gain_pct", 0))
             vr = float(s.get("volume_ratio", 0))
+            pb_days = int(s.get("pullback_days", 0))
+            pb_vol = float(s.get("pullback_vol_ratio", 0))
 
+            # 20 日跌幅下限（熊市口径）
             if drop < cfg["drop_20d_min"]:
                 reject_reasons[f"20日跌幅{drop:.1f}%<{cfg['drop_20d_min']}%"] += 1
                 continue
+            # 20 日高点回调区间（牛市回调口径）
+            if high_min > 0 and (high_drop < high_min or high_drop > high_max):
+                reject_reasons[f"20日高点回调{high_drop:.1f}%不在[{high_min},{high_max}]"] += 1
+                continue
+            # 回调天数（牛市：3-8 天，避免刚启动或已走坏）
+            if pb_min > 0 and pb_days < pb_min:
+                reject_reasons[f"回调仅{pb_days}天<{pb_min}"] += 1
+                continue
+            if pb_max < 999 and pb_days > pb_max:
+                reject_reasons[f"回调{pb_days}天>{pb_max}"] += 1
+                continue
+            # 回调期缩量确认（牛市：回调期量比 ≥0.6 才算缩量筑底）
+            if vol_shrink_min > 0 and pb_vol < vol_shrink_min:
+                reject_reasons[f"回调期量比{pb_vol:.2f}<{vol_shrink_min}"] += 1
+                continue
+            # 振幅上限（牛市回调振幅可能较大，这里保持宽松）
             if amp > cfg["consolidate_amplitude_max"]:
                 reject_reasons[f"5日振幅{amp:.1f}%>{cfg['consolidate_amplitude_max']}%"] += 1
                 continue
+            # 当日涨幅
             if gain < cfg["today_gain_min"]:
                 reject_reasons[f"当日涨幅{gain:.1f}%<{cfg['today_gain_min']}%"] += 1
                 continue
+            # 量比
             if vr < cfg["volume_ratio_min"]:
                 reject_reasons[f"量比{vr:.1f}<{cfg['volume_ratio_min']}"] += 1
                 continue
@@ -319,6 +417,8 @@ class OversoldReboundScanner:
                     "price": stock["price"],
                     "score": round(score, 1),
                     "drop_20d_pct": round(drop, 1),
+                    "drop_from_20d_high_pct": round(float(stock.get("drop_from_20d_high_pct", 0)), 1),
+                    "pullback_days": int(stock.get("pullback_days", 0)),
                     "today_gain_pct": round(gain, 1),
                     "volume_ratio": round(vr, 2),
                     "consolidate_amp_pct": round(float(stock.get("consolidate_amp_pct", 0)), 1),
@@ -326,8 +426,8 @@ class OversoldReboundScanner:
                     "tf60_golden": tf_status.get("tf60_golden", False),
                     "tf30_golden": tf_status.get("tf30_golden", False),
                     "reason": (
-                        f"20日跌{drop:.1f}%超跌，今日涨{gain:.1f}%放量启动，"
-                        f"量比{vr:.1f}，60min金叉确认"
+                        f"20日跌{drop:.1f}%/从高点回调{float(stock.get('drop_from_20d_high_pct', 0)):.1f}%，"
+                        f"今日涨{gain:.1f}%放量启动，量比{vr:.1f}，60min金叉确认"
                     ),
                 }
                 entries.append(entry)

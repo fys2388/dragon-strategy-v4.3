@@ -562,3 +562,99 @@ gh workflow run "调度器健康检查" --repo fys2388/dragon-strategy-v4.3 -f a
 其中 `test_bullish_state_without_fresh_cross_now_passes` 就是针对本 bug 的回归用例
 （DIF 全程高于 DEA，`recent_golden_cross` 在任意 lookback 下都为 False）；
 另 4 项覆盖闸门计数与宽松档宽回看。全量 **123 passed / 0 failed，约 2.2s**。
+
+### 9.7 三个策略重新分工（2026-09-22 二轮重设计）
+
+上一轮修复上线后（run `35696267711`，14:45 档）拿到新的硬证据：
+
+```
+初筛 103 只
+  C 日线DIF零轴下      29   ← 74 只通过
+  D 60min红柱未放大    29
+  D 60min非多头        15   ← 共 44 只被 D 拒（60%），30 只通过
+  E 30min非多头         1
+  F 15min非多头         3
+  G 量能不足×1.2      11
+  H 未突破60min平台   15   ← 15 只到达，15 只全灭（100%）
+  最终推荐              0
+超跌反弹：初筛120 → 超跌条件0（bull_market 里 drop_20d_min=20% 结构性不存在）
+趋势突破：无结果
+```
+
+**H 闸门 15/15 全灭**揭示了设计级的根本冲突：四周期共振是**滞后确认**
+（趋势已经走了很久），突破 5 日新高是**领先确认**（趋势刚刚启动），
+两者同时满足的窗口极窄——四周期都同向的股票价格已经在高位，
+几乎不可能再创新高。加上 `data/tracking.jsonl` 全库只有 10 条记录
+（全是 9-20/9-21 的 breakout，Agent 学习闭环的输入端根本无素材），
+三个策略都在抢同一批「新启动强势股」，谁先筛死谁就 0 推荐。
+
+**分工重构**：
+
+| 策略 | 改前 | 改后 |
+|---|---|---|
+| 共振 | 四周期共振 **且** 突破 5 日新高（互相排斥） | 只做「趋势延续」。删 H 闸门（`require_breakout: False`）；60/30/15min 统一改为「DIF>DEA 即算多头」（零轴判定不再要求）；新增硬条件「至少 N 个分钟周期多头」（`min_bull_minute_tfs`，标准档 2 / 宽松档 1）；量比改双向区间 `[1.2, 3.0]`（排除爆量出货）；打分重算量纲 1.0~3.05 |
+| 超跌反弹 | 单一 `drop_20d_min` 口径，牛市配 20%（结构性不可能） | regime 条件表：**牛市** = 趋势回调（`drop_20d_min=0`，改看 `drop_from_20d_high_pct ∈ [8,20]%` + `pullback_days ∈ [3,8]` + `volume_shrink_min=0.6` + `today_gain_min=2.0`）；**熊市** = 真超跌（`drop_20d_min=25%`，原口径保留） |
+| 趋势突破 | `ma_bullish` 硬过滤、`volume_ratio_min=1.5`、`max_recommend=5` | 只做「新启动」，定义不动。`ma_bullish` 改为打分项（+10 分）；`volume_ratio_min: 1.5 → 1.2`；`max_recommend: 5 → 3`；高位过滤保留 |
+
+**具体配置**（`config.py SIGNAL` + `adaptive_config.MACD_PARAMS`）：
+
+```
+SIGNAL.mode_standard:
+  require_breakout: False
+  volume_ratio_min: 1.2, volume_ratio_max: 3.0
+  min_bull_minute_tfs: 2
+  tf30_require_dif_above_zero: False, tf15_require_cross_zero: False
+
+SIGNAL.mode_relaxed:
+  require_breakout: False
+  volume_ratio_min: 1.0, volume_ratio_max: 2.5
+  min_bull_minute_tfs: 1
+
+adaptive_config.MACD_PARAMS.min_score:
+  bull_market=2.0 / bear_market=2.5 / strong_rebound=2.0 / sideways=2.2 / extreme=2.8
+```
+
+**打分公式重写**（`signal_engine.check_long_entry`）：
+
+```
+score = 1.0  # 基础：日线多头（C 闸门已过）
+        + 0.5 / 0.25  # 60min：零轴上方 / 仅 DIF>DEA
+        + 0.4 / 0.2   # 30min
+        + 0.3 / 0.15  # 15min
+        + 0.3 / 0.15  # 量比 1.2~2.5 健康 / 其他（1.2~3.0 之间）
+        + 0.1         # 无顶背离
+× 0.9 if relaxed
+量纲 1.0~3.05，与 adaptive_config.min_score=2.0 同口径
+```
+
+**为什么这样改**：
+
+- **H 闸门删除**：共振的核心定义就是「多周期一致」，突破是另一个正交维度，
+  应该由 breakout.py 单独负责。合并起来等于要求「已经确认的趋势」再去创造「新突破」，
+  时间上互相排斥。
+- **D/E 改 DIF>DEA**：零轴判定在分钟级过于苛刻。日线 DIF>0 已经足够保证
+  「大方向多头」，分钟级的作用只是确认「短期动能未逆」，DIF>DEA 就是这个含义。
+- **多周期共振核心条件明写**：`min_bull_minute_tfs` 把原来隐含的
+  「多周期一致」改成显式条件，不再依赖 H 闸门兜底。
+- **量比双向**：只有下限会让一只当日量比 8.0 的爆量出货股通过闸门；
+  上限 3.0 是常见的出货信号阈值。
+- **超跌拆两种口径**：牛市里强制要求「20 日跌 20%」是结构性不可能
+  （全市场都在涨），改成「从 20 日高点回调 8%~15%」的**趋势回调买入**语义。
+  熊市仍走真超跌口径。
+- **打分重算**：原公式硬编码「60min 共振 +1.5」，闸门改成状态型后
+  无论实际共振多弱都恒打 3.5 分，`min_score` 过滤形同虚设。
+  新公式按**实际确认到的状态**逐项累加，`min_score` 重新有区分度。
+
+**测试**：`tests/test_signal_engine.py::TestLongEntryStateBased::test_relaxed_mode_accepts_older_cross`
+重写为验证「relaxed 档 `min_bull_minute_tfs=1` 比 standard 档 `min=2` 接受更弱的
+分钟周期组合」，配合新增的 `_is_dif_dea_bull` 助手函数。全量 **123 passed / 0 failed，
+约 2.2s**。
+
+**代价 / 未决**：
+
+- 推荐数会上升（现在 0 是因为筛得太死），Agent 学习闭环终于有素材，
+  但需要重新跑 `weekly_replay_validation.yml` 看新参数在历史样本上的表现。
+- `data/tracking.jsonl` 目前只有 10 条 breakout 记录（9-20/9-21），
+  样本量不足以对比新旧参数——需要至少 5+ 交易日的推荐数据才能做 regime 归因。
+- `data/optimized_params.json` 如果存在旧优化结果，`adaptive_config._load_optimized_params`
+  会覆盖硬编码默认值；上线前应确认该文件不存在或已被清理。

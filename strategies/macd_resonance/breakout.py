@@ -135,7 +135,9 @@ class BreakoutScanner:
         import json as _json
         state_file = ds.os.path.join(self.base_dir, 'data', 'optimization_state.json')
         default_params = {
-            'volume_ratio_min': 1.5,
+            'volume_ratio_min': 1.2,  # ⚠️ 2026-09-22 从 1.5 放宽到 1.2：突破当天量比 1.2 就够。
+                                       #   原 1.5 对大盘股/权重股太严，配合 min_score_override=0
+                                       #   让 breakout 成为三个策略里唯一抓"新启动"的通道。
             'min_score': 40,
             'cooldown_days': 10,
         }
@@ -258,12 +260,14 @@ class BreakoutScanner:
         - 量价配合：放量上涨+15，缩量上涨-10
         - 位置：低位+20，高位-20
         - 20日均线之上：+5
+        - 均线多头排列（ma_bullish）：+10（2026-09-22 新增，从硬过滤改为加分项）
         """
         base = s.get("today_gain_pct", 0) * 3 + s.get("volume_ratio", 0) * 5
         vol_price = s.get("vol_price_score", 0)
         position = s.get("position_score", 0)
         ma20_bonus = 5 if s.get("above_ma20") else 0
-        total = base + vol_price + position + ma20_bonus
+        ma_bullish_bonus = 10 if s.get("ma_bullish") else 0
+        total = base + vol_price + position + ma20_bonus + ma_bullish_bonus
         return round(max(0, min(total, 100)), 1)
 
     def run(self, max_stocks: int = 1200, need_push: bool = False,
@@ -328,7 +332,11 @@ class BreakoutScanner:
             return result
 
         # 大盘3-4分（宽松档）：最多2只，最低得分提高到60
-        max_recommend = 2 if score < 4.0 else 5
+        # ⚠️ 2026-09-22 重设计：max_recommend 从 5 降到 3。
+        #   三个策略各司其职：共振做趋势延续、超跌做趋势回调/真超跌、
+        #   breakout 只做"新启动"。突破当天就该挑剔，宁缺毋滥。
+        #   饥饿度自适应（下方 hunger_days>=3/5/7）仍会把 max_recommend 抬上去。
+        max_recommend = 2 if score < 4.0 else 3
         min_score_override = 50 if score < 4.0 else 0
 
         # === 推荐饥饿度自适应：连续0推荐时自动放宽，让Agent有学习素材 ===
@@ -434,9 +442,12 @@ class BreakoutScanner:
             if not s.get("above_ma20"):
                 reject_reasons["收盘价低于20日均线"] += 1
                 continue
-            if not s.get("ma_bullish"):
-                reject_reasons["均线非多头排列"] += 1
-                continue
+            # ⚠️ 2026-09-22 重设计：均线多头排列（ma_bullish）从硬过滤改为打分项。
+            #   原设计里 ma_bullish 是硬过滤（reject_reasons["均线非多头排列"]），
+            #   把候选直接拒掉。但趋势突破的核心是"新启动"，突破刚发生当天，
+            #   MA5/MA10/MA20 还没排开也是常见形态。
+            #   现在把 ma_bullish 改到 _calc_composite_score 里做 +10 加分项，
+            #   让打分去决定优先级，而不是硬拒。
             # 融合：高位突破大幅减分但不过滤（让打分决定）
             breakout_list.append(s)
 
