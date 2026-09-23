@@ -153,6 +153,55 @@ class TestIndustryInference(unittest.TestCase):
         finally:
             STOCK_CODE_INDUSTRY.pop("000002", None)
 
+    def test_tongfu_weidian_is_electronics_via_keyword(self):
+        """通富微电 应命中电子（关键词新增'通富微电'）。
+
+        推送事故：通富微电真实业务是半导体封测（电子行业），但 LLM
+        在分析文本里幻觉成'医药'。关键词新增后应能正确归到电子。
+        """
+        self.assertEqual(
+            self.analyzer._infer_industry("通富微电"), "电子"
+        )
+
+    def test_tongfu_weidian_is_electronics_via_code(self):
+        """通富微电(002156) 代码兜底表也归到电子（双保险）。"""
+        self.assertEqual(
+            self.analyzer._infer_industry("通富微电", code="002156"), "电子"
+        )
+
+    def test_changdian_is_electronics_via_keyword(self):
+        """长电科技 应命中电子（关键词新增'长电科技'）。"""
+        self.assertEqual(
+            self.analyzer._infer_industry("长电科技"), "电子"
+        )
+
+    def test_huadian_is_electronics_via_keyword(self):
+        """华天科技 应命中电子（关键词新增'华天科技'）。"""
+        self.assertEqual(
+            self.analyzer._infer_industry("华天科技"), "电子"
+        )
+
+    def test_taichi_is_electronics_via_keyword(self):
+        """太极实业 应命中电子（关键词新增'太极实业'）。
+
+        太极实业主业是半导体封装，名字里没有'电子/半导体'，必须收录。
+        """
+        self.assertEqual(
+            self.analyzer._infer_industry("太极实业"), "电子"
+        )
+
+    def test_jingrui_is_electronics_via_keyword(self):
+        """晶瑞电材 应命中电子（关键词新增'晶瑞电材'）。"""
+        self.assertEqual(
+            self.analyzer._infer_industry("晶瑞电材"), "电子"
+        )
+
+    def test_shunluo_is_electronics_via_keyword(self):
+        """顺络电子 应命中电子（'电子'关键词命中，代码兜底表双保险）。"""
+        self.assertEqual(
+            self.analyzer._infer_industry("顺络电子", code="002138"), "电子"
+        )
+
 
 class TestAnalysisPrompt(unittest.TestCase):
     """Prompt 里应显式写出 config.RISK 的止损/目标价，防止 LLM 幻觉。"""
@@ -183,6 +232,19 @@ class TestAnalysisPrompt(unittest.TestCase):
     def test_prompt_emphasizes_no_fabricating_numbers(self):
         prompt = self.analyzer._build_analysis_prompt("000002", "万 科Ａ", 4.19)
         self.assertIn("不要自造数字", prompt)
+
+    def test_prompt_contains_no_fabricating_industry_constraint(self):
+        """Prompt 必须明确禁止 LLM 自行判断行业（防止通富微电脑补成医药）。"""
+        prompt = self.analyzer._build_analysis_prompt("002156", "通富微电", 57.0)
+        self.assertIn("【重要约束】", prompt)
+        self.assertIn("不要自行判断", prompt)
+        self.assertIn("行业归属暂不明确", prompt)
+
+    def test_prompt_includes_industry_hint(self):
+        """Prompt 应明确写出系统推断的行业字段（LLM 必须引用）。"""
+        prompt = self.analyzer._build_analysis_prompt("002156", "通富微电", 57.0)
+        # 通富微电 现在应被推断为电子
+        self.assertIn("行业：电子", prompt)
 
 
 class TestAIScorerGradeThresholds(unittest.TestCase):
