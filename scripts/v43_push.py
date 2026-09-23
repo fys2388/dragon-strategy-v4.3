@@ -144,7 +144,12 @@ def append_ai_score_block(msg: str, entries: list) -> str:
 
 
 def add_multi_dimension_detail(entries: list) -> str:
-    """给推荐股票添加精简多维详情（一行摘要，只显示关键风险/机会）。"""
+    """给推荐股票添加精简多维详情（一行摘要，只显示关键风险/机会）。
+
+    关键：资金流出时不能只贴一个"🔴资金流出"标签，MACD 是滞后指标、
+    共振选出的候选经常撞上资金流出的当天，用户会看到互相打架的信号。
+    这里显式写一句对冲说明，让用户明白「技术信号 vs 资金面」的取舍。
+    """
     if not entries:
         return ""
     try:
@@ -154,13 +159,14 @@ def add_multi_dimension_detail(entries: list) -> str:
             name = e.get("name", "")
             if code:
                 summary = []
+                moneyflow_state = None
                 try:
                     from strategies.macd_resonance.moneyflow import check_moneyflow_trend
                     mf = check_moneyflow_trend(code, days=5)
-                    trend = mf.get("trend", "unknown")
-                    if trend == "outflow":
-                        summary.append("🔴资金流出")
-                    elif trend == "strong_inflow":
+                    moneyflow_state = mf.get("trend", "unknown")
+                    if moneyflow_state == "outflow":
+                        summary.append("🔴资金流出（主力连续减仓）")
+                    elif moneyflow_state == "strong_inflow":
                         summary.append("🟢资金强流入")
                 except Exception:
                     pass
@@ -171,6 +177,11 @@ def add_multi_dimension_detail(entries: list) -> str:
                         summary.append(f"🔴利空{news['bearish_count']}条")
                 except Exception:
                     pass
+                # 资金流出 → 显式提示用户 MACD 与资金面背离，需要降档仓位
+                if moneyflow_state == "outflow":
+                    summary.append(
+                        "⚠️MACD滞后于资金面，出现背离；建议按建议仓位的50%以下试仓"
+                    )
                 if summary:
                     details.append(f"  ⚠️ {name}：{'、'.join(summary)}")
         return "\n".join(details)

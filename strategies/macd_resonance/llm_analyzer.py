@@ -20,7 +20,7 @@ from typing import Dict, List, Optional, Any
 import requests
 
 from . import data_source as ds
-from .config import LLM
+from .config import LLM, RISK
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CACHE_FILE = os.path.join(BASE_DIR, "data", "stock_analysis_cache.json")
@@ -54,7 +54,12 @@ INDUSTRY_KEYWORDS = {
     "银行": ["银行"],
     "证券": ["证券", "券商", "资本"],
     "保险": ["保险", "人寿", "平安"],
-    "房地产": ["地产", "置业", "建设", "城建"],
+    # 万科A(000002)/保利发展(600048)/招商蛇口(001979)/金地集团(600383)/
+    # 新城控股(601155)/龙湖集团(09977) 等地产龙头名字里没有"地产/置业/建设"字样，
+    # 靠关键字匹配会全部落到"综合"，导致基本面打分和 LLM 叙述把地产股说成综合类企业。
+    "房地产": ["地产", "置业", "建设", "城建", "万科", "保利", "招商蛇口",
+               "金地", "新城", "龙湖", "碧桂园", "旭辉", "金科", "融信",
+               "华侨城", "首开", "华发"],
     "医药": ["医药", "生物", "制药", "医疗", "健康"],
     "电子": ["电子", "科技", "半导体", "芯片", "光电"],
     "计算机": ["软件", "信息", "网络", "数据", "智能"],
@@ -170,7 +175,12 @@ class StockAnalyzer:
 
     def _build_analysis_prompt(self, code: str, name: str, price: float,
                                 huangyang_score: Optional[int] = None) -> str:
-        """构建分析 prompt。"""
+        """构建分析 prompt。
+
+        止损/目标价口径强约束：由 config.py 的 RISK.stop_loss_pct 计算止损价，
+        LLM 不能自由发挥。历史推送里出现过 -9.3% 的止损（config 是 -5%），
+        单票仓位 3000 元 = 亏 300 元，是风控设计上限的 2 倍。
+        """
         industry = self._infer_industry(name)
         # 如果已有黄阳打分，将分数传入prompt，让LLM基于分数评级而非自行判断
         score_section = ""
@@ -185,19 +195,28 @@ class StockAnalyzer:
 - <35分 = 差
 请在分析中引用该分数和对应评级，不要自行重新判断评级。
 """
+        # 硬止损口径由 config.py 统一维护，LLM 只能按此计算不能自造
+        stop_loss_pct = RISK.get("stop_loss_pct", 0.05)
+        stop_loss_price = round(price * (1 - stop_loss_pct), 2) if price > 0 else 0.0
+        take_profit_1 = RISK.get("take_profit_1_pct", 0.10)
+        target_price_hint = round(price * (1 + take_profit_1), 2) if price > 0 else 0.0
         return f"""你是A股量化分析师。请分析以下股票，用 JSON 格式回复（不要加其他文字）：
 
 股票：{name}({code})
 现价：{price}元
 行业：{industry}
 {score_section}
+风控口径（必须严格遵守，不要自造数字）：
+- 硬止损：{stop_loss_pct*100:.0f}%，对应止损价 = {stop_loss_price} 元
+- 首档止盈参考：+{take_profit_1*100:.0f}%，对应 {target_price_hint} 元
+
 请输出：
 {{
   "推荐理由": "1-2句话核心推荐逻辑",
   "风险提示": "1句话主要风险点",
-  "仓位建议": "X%试仓 / X%观察 / 不建议",
-  "目标价": 数字（元），
-  "止损价": 数字（元）
+  "仓位建议": "X%试仓 / X%观察 / 不建议（单票最大仓位 30%）",
+  "目标价": 数字（元，参考首档止盈 {target_price_hint} 元附近，可上下浮动），
+  "止损价": {stop_loss_price}
 }}
 """
 
@@ -216,10 +235,51 @@ class StockAnalyzer:
                 if text.startswith("json"):
                     text = text[4:]
                 text = text.strip()
-            return json.loads(text)
+            data = json.loads(text)
         except (json.JSONDecodeError, IndexError) as e:
             print(f"[LLM] {name}({code}) JSON 解析失败: {e}，降级到规则方案")
             return None
+
+        # 后端保险：LLM 有时无视 prompt 里的止损约束自己拍数字。
+        self._clamp_risk_fields(data, price)
+        return data
+
+    @staticmethod
+    def _clamp_risk_fields(data: Dict[str, Any], price: float) -> None:
+        """把 LLM 返回的止损价/目标价强制夹到 config.RISK 口径内。就地修改 data。
+
+        - 止损价：强制等于 price * (1 - stop_loss_pct)（不允许 LLM 自造）
+        - 目标价：不低于首档止盈档价（price * (1 + take_profit_1_pct)），
+          避免 LLM 给出比首档止盈还低的目标价（盈亏比不足）
+
+        历史事故：LLM 曾对 4.19 元的万科A 报出 3.80 元止损（-9.3%，config 是 -5%），
+        单票仓位 3000 元 → 亏 300 元，是风控设计上限的 2 倍。
+        """
+        if price <= 0:
+            return
+        stop_loss_pct = RISK.get("stop_loss_pct", 0.05)
+        expected_stop = round(price * (1 - stop_loss_pct), 2)
+        try:
+            llm_stop = float(data.get("止损价", 0) or 0)
+        except (TypeError, ValueError):
+            llm_stop = 0.0
+        if llm_stop <= 0 or llm_stop != expected_stop:
+            if llm_stop > 0:
+                print(f"[LLM] 止损价强制校正: {llm_stop} → {expected_stop}"
+                      f"（config.RISK.stop_loss_pct={stop_loss_pct}）")
+            data["止损价"] = expected_stop
+
+        take_profit_1_pct = RISK.get("take_profit_1_pct", 0.10)
+        min_target = round(price * (1 + take_profit_1_pct), 2)
+        try:
+            llm_target = float(data.get("目标价", 0) or 0)
+        except (TypeError, ValueError):
+            llm_target = 0.0
+        if llm_target <= 0:
+            data["目标价"] = min_target
+        elif llm_target < min_target:
+            print(f"[LLM] 目标价过低({llm_target})，抬升到首档止盈档 {min_target}")
+            data["目标价"] = min_target
 
     def _build_llm_interpretation(self, llm_result: Dict[str, Any],
                                    huangyang_score: Optional[int],
@@ -337,11 +397,37 @@ class StockAnalyzer:
         return results
 
     def _infer_industry(self, name: str) -> str:
-        """从股票名称推断行业。"""
+        """从股票名称推断行业。
+
+        归一化：去掉所有空白字符、把全角字母数字转成半角。
+        背景：数据源（东财 f58 字段）返回的"万 科Ａ"带半角空格和全角Ａ，
+        直接对原始名字做 `in` 匹配会漏掉"万科"这类关键词，导致地产股
+        被错误归到"综合"。历史上推送里出现过万科A 行业标"综合"的事故。
+        """
+        if not name:
+            return "综合"
+        normalized = self._normalize_stock_name(name)
         for industry, keywords in INDUSTRY_KEYWORDS.items():
-            if any(kw in name for kw in keywords):
+            if any(kw in normalized for kw in keywords):
                 return industry
         return "综合"
+
+    @staticmethod
+    def _normalize_stock_name(name: str) -> str:
+        """归一化股票名称：去空白 + 全角转半角。"""
+        # 去所有 Unicode 空白字符（空格、全角空格、tab 等）
+        stripped = "".join(ch for ch in name if not ch.isspace())
+        # 全角转半角：全角字符的 code point 都在 FF00~FFEF 之间
+        result = []
+        for ch in stripped:
+            cp = ord(ch)
+            if 0xFF01 <= cp <= 0xFF5E:
+                result.append(chr(cp - 0xFEE0))
+            elif cp == 0x3000:  # 全角空格
+                continue
+            else:
+                result.append(ch)
+        return "".join(result)
 
     def _analyze_fundamental(self, code: str, name: str, price: float) -> Dict[str, Any]:
         """基本面分析（基于名称推断+技术面辅助）。"""

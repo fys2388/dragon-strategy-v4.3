@@ -163,8 +163,16 @@ class AIScorer:
                 line = f"  {emoji} {e.get('name', '')}({e.get('code', '')})：" \
                        f"上涨概率{score:.1f}%（{label}）"
             else:
-                emoji, label = ("🟢", "强") if score >= 75 else \
-                               (("🟡", "中") if score >= 60 else ("⚪", "弱"))
+                # 规则打分阈值口径（2026-09-22 收紧）：
+                #   旧：≥75 强 / ≥60 中 / <60 弱
+                #   新：≥85 强 / ≥70 中 / <70 弱
+                # 理由：规则打分 0~100 是加分制、满分理论可达 100 但实际分布集中在 60-90，
+                #       把 75 分标成"强🟢"会让普通用户误读为"90%上涨概率"，
+                #       收紧到 85 才更贴近「真的罕见强信号」。飞书推送里
+                #       "规则打分 0~100，非上涨概率" 的免责文案已经加了，
+                #       但分级 emoji 也需要一致地保守。
+                emoji, label = ("🟢", "强") if score >= 85 else \
+                               (("🟡", "中") if score >= 70 else ("⚪", "弱"))
                 hits = e.get("ai_score_hits") or []
                 hit_txt = ("，命中：" + "、".join(hits[:3])) if hits else ""
                 line = f"  {emoji} {e.get('name', '')}({e.get('code', '')})：" \
