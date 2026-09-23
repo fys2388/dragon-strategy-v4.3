@@ -95,18 +95,63 @@ class TestIndustryInference(unittest.TestCase):
     def test_luohu_is_real_estate(self):
         self.assertEqual(self.analyzer._infer_industry("龙湖集团"), "房地产")
 
-    def test_lotus_holds_still_falls_back(self):
-        """莲花控股主营调味品，不在地产名单里，应归到食品饮料（"调味"关键词）。"""
+    def test_lotus_holds_still_falls_back_without_code(self):
+        """莲花控股 名字里没有行业词，仅靠关键词会归"综合"（保留旧行为）。"""
         industry = self.analyzer._infer_industry("莲花控股")
-        self.assertNotEqual(industry, "房地产")
-        # "控股"不在关键词里，会回落到"综合"，这是可接受的
-        # 关键是它不应误判为房地产
-        self.assertIn(industry, ["综合", "食品饮料"])
+        self.assertEqual(industry, "综合")
+
+    def test_lotus_holds_falls_back_to_food_via_code(self):
+        """莲花控股(600186) 通过代码兜底表归到食品饮料。"""
+        industry = self.analyzer._infer_industry("莲花控股", code="600186")
+        self.assertEqual(industry, "食品饮料")
 
     def test_tianwu_is_electronics(self):
         """天沃科技主营军工电子，命中"电子"关键词。"""
-        industry = self.analyzer._infer_industry("天沃科技")
-        self.assertEqual(industry, "电子")
+        self.assertEqual(self.analyzer._infer_industry("天沃科技"), "电子")
+
+    def test_qianjin_pharma_is_pharma(self):
+        """千金药业应命中医药（关键词新增"药业"）。"""
+        self.assertEqual(self.analyzer._infer_industry("千金药业"), "医药")
+
+    def test_kweichow_moutai_is_food(self):
+        """贵州茅台应命中食品饮料（白酒龙头）。"""
+        self.assertEqual(self.analyzer._infer_industry("贵州茅台"), "食品饮料")
+
+    def test_wuliangye_is_food(self):
+        """五粮液应命中食品饮料。"""
+        self.assertEqual(self.analyzer._infer_industry("五粮液"), "食品饮料")
+
+    def test_yili_is_food(self):
+        """伊利股份应命中食品饮料。"""
+        self.assertEqual(self.analyzer._infer_industry("伊利股份"), "食品饮料")
+
+    def test_byd_is_automotive(self):
+        """比亚迪应命中汽车（关键词新增"比亚迪"）。"""
+        self.assertEqual(self.analyzer._infer_industry("比亚迪"), "汽车")
+
+    def test_tangli_bread_falls_back_via_code(self):
+        """桃李面包(603866) 名字里没有"面包"关键词，走代码兜底。"""
+        self.assertEqual(
+            self.analyzer._infer_industry("桃李面包", code="603866"), "食品饮料"
+        )
+
+    def test_code_none_or_empty_falls_back_to_generic(self):
+        """code 为空/None 时不查询兜底表，仍归综合。"""
+        self.assertEqual(self.analyzer._infer_industry("莲花控股", code=""), "综合")
+        self.assertEqual(self.analyzer._infer_industry("莲花控股", code=None), "综合")
+
+    def test_keyword_priority_over_code_fallback(self):
+        """关键词命中优先于代码兜底表（兜底表不覆盖关键词）。"""
+        from strategies.macd_resonance.llm_analyzer import STOCK_CODE_INDUSTRY
+        # 临时把万科的代码标成"化工"，看是否被关键词覆盖
+        STOCK_CODE_INDUSTRY["000002"] = "化工"
+        try:
+            # 万科 关键词命中"房地产"，优先于代码兜底
+            self.assertEqual(
+                self.analyzer._infer_industry("万科", code="000002"), "房地产"
+            )
+        finally:
+            STOCK_CODE_INDUSTRY.pop("000002", None)
 
 
 class TestAnalysisPrompt(unittest.TestCase):

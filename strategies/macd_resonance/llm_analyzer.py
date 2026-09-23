@@ -60,13 +60,24 @@ INDUSTRY_KEYWORDS = {
     "房地产": ["地产", "置业", "建设", "城建", "万科", "保利", "招商蛇口",
                "金地", "新城", "龙湖", "碧桂园", "旭辉", "金科", "融信",
                "华侨城", "首开", "华发"],
-    "医药": ["医药", "生物", "制药", "医疗", "健康"],
+    # 医药：名字里含"药业"的是最常见的中药/化药企业（千金药业、白云山、太极
+    # 集团、片仔癀、云南白药、上海家化 等），关键词不能漏"药业"两个字，否则
+    # 一大类医药股会被错归"综合"，LLM 分析叙述就跟着跑偏。
+    "医药": ["医药", "生物", "制药", "药业", "医疗", "健康", "片仔癀"],
     "电子": ["电子", "科技", "半导体", "芯片", "光电"],
     "计算机": ["软件", "信息", "网络", "数据", "智能"],
     "电力设备": ["电气", "电力", "新能源", "光伏", "电池"],
     "机械设备": ["机械", "设备", "重工", "精密"],
     "汽车": ["汽车", "车业", "零部件"],
-    "食品饮料": ["食品", "饮料", "酒业", "乳业", "调味"],
+    # 食品饮料：白酒/乳业/调味品龙头名字里很少直接带"食品/饮料/酒业"字样
+    # （贵州茅台、五粮液、泸州老窖、洋河股份、青岛啤酒、伊利股份、海天味业、
+    # 双汇发展、金龙鱼 等），得靠公司名直接命中。
+    "食品饮料": ["食品", "饮料", "酒业", "乳业", "调味",
+                 "茅台", "五粮液", "泸州老窖", "洋河", "汾酒",
+                 "青岛啤酒", "伊利", "双汇", "海天", "金龙鱼",
+                 "古井", "今世缘", "舍得", "水井坊", "张裕",
+                 "农夫山泉", "养元饮品", "安井", "三全", "思念",
+                 "绝味", "周黑鸭", "千味"],
     "化工": ["化工", "化学", "新材", "材料"],
     "有色金属": ["有色", "金属", "黄金", "铜业", "铝业"],
     "钢铁": ["钢铁", "特钢"],
@@ -84,6 +95,28 @@ INDUSTRY_KEYWORDS = {
     "国防军工": ["军工", "航天", "航空", "兵器", "船舶"],
     "美容护理": ["美妆", "护理", "日化"],
 }
+
+# ============================================================
+# 股票代码 → 行业 兜底表
+# ------------------------------------------------------------
+# 有些股票名字里完全没有行业信息，关键词匹配必然落到"综合"：
+# - 莲花控股(600186)：主业"味精+健康饮品"，名字里没有"味精/食品/饮料"
+# - 双汇发展、承德露露、洽洽食品 等：名字里没有行业关键词
+#
+# 收录原则（严格）：
+#   1. 关键词匹配不到（否则会重复/冲突）
+#   2. 推送里大概率会作为推荐标的出现（不是冷门股）
+#   3. 行业归属在业内没有争议（避免用兜底表掩盖关键词设计缺陷）
+#
+# 新出现的漏网之鱼追加进来即可，不需要改关键词逻辑。
+STOCK_CODE_INDUSTRY: Dict[str, str] = {
+    # 食品/饮料/调味 —— 名字里没有对应关键词
+    "600186": "食品饮料",  # 莲花控股（主业：味精+健康饮品，名字里无行业词）
+    "603866": "食品饮料",  # 桃李面包（"面包"不在关键词里）
+}
+
+# 汽车关键词补"比亚迪"
+INDUSTRY_KEYWORDS["汽车"].append("比亚迪")
 
 
 class StockAnalyzer:
@@ -181,7 +214,7 @@ class StockAnalyzer:
         LLM 不能自由发挥。历史推送里出现过 -9.3% 的止损（config 是 -5%），
         单票仓位 3000 元 = 亏 300 元，是风控设计上限的 2 倍。
         """
-        industry = self._infer_industry(name)
+        industry = self._infer_industry(name, code)
         # 如果已有黄阳打分，将分数传入prompt，让LLM基于分数评级而非自行判断
         score_section = ""
         if huangyang_score is not None:
@@ -283,7 +316,7 @@ class StockAnalyzer:
 
     def _build_llm_interpretation(self, llm_result: Dict[str, Any],
                                    huangyang_score: Optional[int],
-                                   name: str) -> str:
+                                   name: str, code: str = "") -> str:
         """构建LLM分析解读文本，用黄阳打分统一评级口径。"""
         parts = []
 
@@ -300,7 +333,7 @@ class StockAnalyzer:
             else:
                 parts.append(f"基本面较差（评分{huangyang_score}分），不建议参与")
         else:
-            industry = self._infer_industry(name)
+            industry = self._infer_industry(name, code)
             parts.append(f"行业：{industry}")
 
         # LLM 核心分析
@@ -348,7 +381,7 @@ class StockAnalyzer:
             print(f"[LLM] ✅ {name}({code}) LLM 分析成功")
             # 用黄阳打分统一评级，避免LLM幻觉
             interpretation = self._build_llm_interpretation(
-                llm_result, huangyang_score, name
+                llm_result, huangyang_score, name, code
             )
             result = {
                 "code": code,
@@ -396,19 +429,32 @@ class StockAnalyzer:
                 results.append(e)
         return results
 
-    def _infer_industry(self, name: str) -> str:
-        """从股票名称推断行业。
+    def _infer_industry(self, name: str, code: Optional[str] = None) -> str:
+        """推断行业。优先级：名称关键词 → 代码兜底表 → "综合"。
 
         归一化：去掉所有空白字符、把全角字母数字转成半角。
-        背景：数据源（东财 f58 字段）返回的"万 科Ａ"带半角空格和全角Ａ，
-        直接对原始名字做 `in` 匹配会漏掉"万科"这类关键词，导致地产股
-        被错误归到"综合"。历史上推送里出现过万科A 行业标"综合"的事故。
+        背景：数据源（东财 f58 字段）返回的股票名带半角空格和全角字母，
+        直接对原始名字做 `in` 匹配会漏掉关键词，导致股票被错归"综合"。
+        历史上推送里出现过万科A 行业标"综合"的事故。
+
+        代码兜底：有些股票名字里没有行业信息（如莲花控股主业是味精+饮品，
+        名字里没有"食品/饮料/味精"），关键词匹配必落到"综合"，此时按
+        STOCK_CODE_INDUSTRY 兜底。只在关键词未命中时才走代码兜底，避免
+        兜底表掩盖关键词逻辑缺陷。
+
+        Args:
+            name: 股票名称（可为全角/半角混排）
+            code: 6 位股票代码，可选；提供时可在关键词匹配失败后走兜底表
         """
-        if not name:
-            return "综合"
-        normalized = self._normalize_stock_name(name)
-        for industry, keywords in INDUSTRY_KEYWORDS.items():
-            if any(kw in normalized for kw in keywords):
+        if name:
+            normalized = self._normalize_stock_name(name)
+            for industry, keywords in INDUSTRY_KEYWORDS.items():
+                if any(kw in normalized for kw in keywords):
+                    return industry
+        # 关键词未命中时，尝试代码兜底
+        if code:
+            industry = STOCK_CODE_INDUSTRY.get(code)
+            if industry:
                 return industry
         return "综合"
 
@@ -431,7 +477,7 @@ class StockAnalyzer:
 
     def _analyze_fundamental(self, code: str, name: str, price: float) -> Dict[str, Any]:
         """基本面分析（基于名称推断+技术面辅助）。"""
-        industry = self._infer_industry(name)
+        industry = self._infer_industry(name, code)
 
         fundamental = {
             "industry": industry,
@@ -491,7 +537,7 @@ class StockAnalyzer:
     def _mine_themes(self, code: str, name: str) -> List[str]:
         """题材挖掘。"""
         themes = []
-        industry = self._infer_industry(name)
+        industry = self._infer_industry(name, code)
 
         # 从名称匹配题材
         for theme, keywords in THEME_KEYWORDS.items():
