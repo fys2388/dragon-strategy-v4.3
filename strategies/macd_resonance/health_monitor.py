@@ -96,6 +96,7 @@ class HealthMonitor:
 
         与 record_recommendations 独立：异常时仍记录推荐数（可能为0），
         但额外标记异常类型，供后续诊断和飞书告警使用。
+        累计 3 次异常时触发 Level 1 降级。
         """
         if date is None:
             date = now_bjt().strftime("%Y-%m-%d")
@@ -112,6 +113,11 @@ class HealthMonitor:
             self.state["anomaly_history"] = self.state["anomaly_history"][-50:]
         self._save_state()
         print(f"⚠️ 数据异常记录：{anomaly_type}（累计{self.state['anomaly_count']}次）")
+        
+        # 累计 3 次数据异常时触发降级检查
+        ANOMALY_DEGRADATION_THRESHOLD = 3
+        if self.state["anomaly_count"] >= ANOMALY_DEGRADATION_THRESHOLD:
+            self._check_degradation()
 
     def _recompute_zero_days(self):
         """从 daily_recommendations 推导「连续0推荐」天数（幂等）。
@@ -131,26 +137,44 @@ class HealthMonitor:
         self.state["consecutive_zero_days"] = streak
 
     def _check_degradation(self):
-        """检查是否需要降级。"""
+        """检查是否需要降级。
+
+        降级触发条件（满足任一即降级）：
+        1. 连续 N 天 0 推荐（原有逻辑）
+        2. 累计 M 次数据异常（新增逻辑，防止数据源异常时误判为市场弱势）
+        """
         zero_days = self.state["consecutive_zero_days"]
+        anomaly_count = self.state.get("anomaly_count", 0)
         current_level = self.state["degradation_level"]
 
-        # 计算应该降级到哪一级
+        # 条件 1：连续 0 推荐天数触发降级
         target_level = 0
         for level, threshold in sorted(DEGRADATION_THRESHOLDS.items()):
             if zero_days >= threshold:
                 target_level = level
 
+        # 条件 2：累计数据异常次数触发降级（至少 Level 1）
+        ANOMALY_DEGRADATION_THRESHOLD = 3  # 累计 3 次数据异常触发 Level 1
+        if anomaly_count >= ANOMALY_DEGRADATION_THRESHOLD and target_level < 1:
+            target_level = 1
+
         if target_level > current_level:
             old_level = current_level
             self.state["degradation_level"] = target_level
+            # 记录降级原因
+            if zero_days >= 3:
+                reason = f"连续{zero_days}天0推荐"
+            elif anomaly_count >= ANOMALY_DEGRADATION_THRESHOLD:
+                reason = f"累计{anomaly_count}次数据异常"
+            else:
+                reason = f"连续{zero_days}天0推荐 + {anomaly_count}次数据异常"
             self.state["degradation_history"].append({
                 "date": now_bjt().strftime("%Y-%m-%d %H:%M:%S"),
                 "from_level": old_level,
                 "to_level": target_level,
-                "reason": f"连续{zero_days}天0推荐",
+                "reason": reason,
             })
-            print(f"⚠️ 系统降级：Level {old_level} → Level {target_level}（连续{zero_days}天0推荐）")
+            print(f"⚠️ 系统降级：Level {old_level} → Level {target_level}（{reason}）")
 
     def _check_recovery(self, record_date: str):
         """检查是否需要恢复（本次记录出现推荐即降一级）。

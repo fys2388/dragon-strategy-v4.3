@@ -311,3 +311,144 @@ class MarketData:
    · 建议检查东财接口是否正常，或等待下次推送
    · 本次推送数据可能不准确，请勿据此交易
 ```
+
+---
+
+## 2026-09-23 第五轮审阅：数据异常预防
+
+### 背景
+
+第 5 轮系统性审查发现 **3 个未修复的盲区**：
+
+| 问题 | 位置 | 严重性 |
+|---|---|---|
+| 数据源返回异常数据时没有过滤 | `data_source.py:688-694` | P0 |
+| 硬过滤逻辑没有区分"数据异常"和"正常拒绝" | `filters.py:44-52` | P0 |
+| 健康度监控没有把异常计数纳入降级逻辑 | `health_monitor.py:109-129` | P1 |
+
+**根本原因**：数据源返回 `price=0` 或 `cap=0` 的股票，
+被硬过滤全部拒绝（price < 3.5 或 cap < 40），导致"硬过滤0只"。
+
+### 问题 1：数据源返回异常数据时没有过滤（P0）
+
+**根因**：`data_source.py` 的 `get_mainboard_stocks()` 没有过滤 `price=0` 或 `cap=0` 的股票：
+
+```python
+stocks.append({
+    "code": code,
+    "name": str(item.get("f14", "")),
+    "price": float(item.get("f2", 0) or 0),  # ← 如果 f2=0，price=0
+    "float_cap_yi": get_float_market_cap_yi(item),  # ← 如果 f20=None，cap=0
+    "amount_yi": get_amount_yi(item),
+})
+```
+
+**修复**：在 `get_mainboard_stocks()` 里过滤掉异常数据：
+
+```python
+# 过滤掉 price=0 或 cap=0 的股票（数据异常，避免硬过滤0只）
+if price <= 0 or cap <= 0:
+    continue
+```
+
+同样修复了 `_get_mainboard_stocks_sina()`（备用数据源）。
+
+### 问题 2：硬过滤逻辑没有区分"数据异常"和"正常拒绝"（P0）
+
+**根因**：`filters.py` 的 `pass_hard_filters()` 把 `price=0` 当作"正常拒绝"：
+
+```python
+# 3. 股价范围
+price = float(stock_info.get("price", 0) or 0)
+if price < HARD_FILTERS["price_min"] or price > HARD_FILTERS["price_max"]:
+    return False, f"{code} 价格{price:.2f}元不在{HARD_FILTERS['price_min']}-{HARD_FILTERS['price_max']}元"
+```
+
+**修复**：在 `pass_hard_filters()` 里区分"数据异常"和"正常拒绝"：
+
+```python
+# 3. 股价范围（数据异常：price=0）
+price = float(stock_info.get("price", 0) or 0)
+if price <= 0:
+    return False, f"{code} 数据异常：价格{price:.2f}元≤0"
+if price < HARD_FILTERS["price_min"] or price > HARD_FILTERS["price_max"]:
+    return False, f"{code} 价格{price:.2f}元不在{HARD_FILTERS['price_min']}-{HARD_FILTERS['price_max']}元"
+```
+
+同样修复了流通市值的判断。
+
+### 问题 3：健康度监控没有把异常计数纳入降级逻辑（P1）
+
+**根因**：`health_monitor.py` 的 `_check_degradation()` 只基于"连续 0 推荐天数"：
+
+```python
+def _check_degradation(self):
+    """检查是否需要降级。"""
+    zero_days = self.state["consecutive_zero_days"]
+    current_level = self.state["degradation_level"]
+    
+    # 计算应该降级到哪一级
+    target_level = 0
+    for level, threshold in sorted(DEGRADATION_THRESHOLDS.items()):
+        if zero_days >= threshold:
+            target_level = level
+```
+
+**修复**：在 `_check_degradation()` 里增加异常计数判断：
+
+```python
+def _check_degradation(self):
+    """检查是否需要降级。
+
+    降级触发条件（满足任一即降级）：
+    1. 连续 N 天 0 推荐（原有逻辑）
+    2. 累计 M 次数据异常（新增逻辑，防止数据源异常时误判为市场弱势）
+    """
+    zero_days = self.state["consecutive_zero_days"]
+    anomaly_count = self.state.get("anomaly_count", 0)
+    current_level = self.state["degradation_level"]
+
+    # 条件 1：连续 0 推荐天数触发降级
+    target_level = 0
+    for level, threshold in sorted(DEGRADATION_THRESHOLDS.items()):
+        if zero_days >= threshold:
+            target_level = level
+
+    # 条件 2：累计数据异常次数触发降级（至少 Level 1）
+    ANOMALY_DEGRADATION_THRESHOLD = 3  # 累计 3 次数据异常触发 Level 1
+    if anomaly_count >= ANOMALY_DEGRADATION_THRESHOLD and target_level < 1:
+        target_level = 1
+```
+
+同时在 `record_anomaly()` 里调用 `_check_degradation()`，确保异常计数触发降级。
+
+### 测试
+
+- 修改前：207 passed
+- 修改后：**216 passed**（+9 项新测试）
+  - 5 项 `filters` 测试（price=0/cap=0 数据异常、price/cap 低于最小值正常拒绝、正常股票通过）
+  - 4 项 `health_monitor` 测试（异常计数触发降级、低于阈值不降级、0推荐仍触发降级、组合条件触发降级）
+
+### 修复效果
+
+**修复前（推送 3）：**
+```
+数据源返回 price=0/cap=0 的股票 → 硬过滤全部拒绝 → "硬过滤0只"
+→ agent 没有检测到异常 → 推送"市场极度弱势" → 用户误以为市场弱势
+```
+
+**修复后：**
+```
+数据源返回 price=0/cap=0 的股票 → 数据源层过滤掉异常数据
+→ 如果仍有异常 → 硬过滤标记"数据异常" → 推送🚨告警
+→ 累计 3 次异常 → 健康度降级 Level 1 → 放宽过滤条件
+```
+
+### 相关历史
+
+- 2026-09-21 万科A 行业标签错标（半角空格+全角Ａ）
+- 2026-09-23 第一轮扩展：关键词覆盖度不足（千金药业、茅台、五粮液、伊利、莲花控股）
+- 2026-09-23 第二轮扩展：LLM 幻觉（通富微电脑补成医药）
+- 2026-09-23 第三轮：市场建议动态化（硬编码"谨慎开仓"与实际评分矛盾）
+- 2026-09-23 第四轮：数据异常检测（硬过滤0只但无告警）
+- 本轮（第五轮）：**数据异常预防**（数据源过滤 + 硬过滤区分 + 异常降级）

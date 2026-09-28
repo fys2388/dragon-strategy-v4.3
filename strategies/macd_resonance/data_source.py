@@ -619,6 +619,9 @@ def _get_mainboard_stocks_sina(limit: int = 6000, verbose_pool: bool = True) -> 
                     amount = float(item.get("amount", 0) or 0)
                 except (TypeError, ValueError):
                     amount = 0.0
+                # 过滤掉 price=0 或 cap=0 的股票（数据异常，避免硬过滤0只）
+                if trade <= 0 or nmc_wan <= 0:
+                    continue
                 stocks.append({
                     "code": code,
                     "name": str(item.get("name", "")),
@@ -685,11 +688,16 @@ def get_mainboard_stocks(limit: int = 6000, verbose_pool: bool = True) -> List[D
             if code in seen:
                 continue
             seen.add(code)
+            price = float(item.get("f2", 0) or 0)
+            cap = get_float_market_cap_yi(item)
+            # 过滤掉 price=0 或 cap=0 的股票（数据异常，避免硬过滤0只）
+            if price <= 0 or cap <= 0:
+                continue
             stocks.append({
                 "code": code,
                 "name": str(item.get("f14", "")),
-                "price": float(item.get("f2", 0) or 0),
-                "float_cap_yi": get_float_market_cap_yi(item),
+                "price": price,
+                "float_cap_yi": cap,
                 "amount_yi": get_amount_yi(item),
             })
         time.sleep(0.2)

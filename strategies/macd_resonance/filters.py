@@ -41,13 +41,17 @@ def pass_hard_filters(stock_info: dict, amplitude_max: float = None) -> Tuple[bo
     if is_st(name):
         return False, f"{code} ST/退市风险"
 
-    # 3. 股价范围
+    # 3. 股价范围（数据异常：price=0）
     price = float(stock_info.get("price", 0) or 0)
+    if price <= 0:
+        return False, f"{code} 数据异常：价格{price:.2f}元≤0"
     if price < HARD_FILTERS["price_min"] or price > HARD_FILTERS["price_max"]:
         return False, f"{code} 价格{price:.2f}元不在{HARD_FILTERS['price_min']}-{HARD_FILTERS['price_max']}元"
 
-    # 4. 流通市值范围
+    # 4. 流通市值范围（数据异常：cap=0）
     cap = float(stock_info.get("float_cap_yi", 0) or 0)
+    if cap <= 0:
+        return False, f"{code} 数据异常：流通市值{cap:.1f}亿≤0"
     if cap < HARD_FILTERS["cap_min_yi"] or cap > HARD_FILTERS["cap_max_yi"]:
         return False, f"{code} 流通市值{cap:.1f}亿不在{HARD_FILTERS['cap_min_yi']}-{HARD_FILTERS['cap_max_yi']}亿"
 
