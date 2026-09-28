@@ -207,6 +207,37 @@ def get_market_cluster_info() -> dict:
         return {}
 
 
+def _generate_dynamic_recommendation(cluster_info: dict, market_score: float) -> str:
+    """根据市场聚类 + 大盘评分生成动态建议。
+
+    历史事故：market_cluster.py 的 recommendation 是硬编码的"谨慎开仓"，
+    但 market_gate 实际分数 0/7 时应该"暂停开仓"。用户看到"谨慎开仓"
+    以为可以下单，但大盘 0/7 实际不允许开仓（can_open=False）。
+
+    动态规则：
+    - score < open_threshold(3.0)：暂停开仓，观望为主
+    - open_threshold(3.0) <= score < standard_threshold(4.0)：谨慎开仓，轻仓试错
+    - score >= standard_threshold(4.0)：使用原始 recommendation
+    """
+    from strategies.macd_resonance.config import MARKET_GATE
+    params = cluster_info.get("strategy_params", {})
+    base_recommendation = params.get("recommendation", "")
+
+    open_threshold = MARKET_GATE.get("open_threshold", 3.0)
+    standard_threshold = MARKET_GATE.get("standard_threshold", 4.0)
+
+    # 大盘评分过低（< open_threshold），明确禁止开仓
+    if market_score < open_threshold:
+        return f"⚠️ 大盘评分过低（{market_score:.0f}/7），暂停开仓，观望为主"
+
+    # 大盘评分中等（open_threshold ~ standard_threshold），谨慎开仓
+    if market_score < standard_threshold:
+        return f"谨慎开仓，轻仓试错（大盘{market_score:.0f}/7，宽松档）"
+
+    # 大盘评分高（>= standard_threshold），使用原始 recommendation
+    return base_recommendation
+
+
 def push_premarket_report() -> bool:
     """盘前报告：复用 morning_noon_push 的生成逻辑（大盘概况+昨日推荐+持仓提醒）。"""
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # scripts/ 目录
@@ -421,11 +452,14 @@ def main():
     cluster_info = get_market_cluster_info()
     cluster_header = ""
     if cluster_info:
-        params = cluster_info.get("strategy_params", {})
+        # 根据市场评分动态生成建议（避免硬编码"谨慎开仓"与实际评分矛盾）
+        recommendation = _generate_dynamic_recommendation(
+            cluster_info, result.get("market_score", 0.0)
+        )
         cluster_header = (
             f"🧠 AI市场状态：{cluster_info.get('cluster_name_cn', '未知')}"
             f"（{cluster_info.get('cluster_name', '')}）\n"
-            f"📌 {params.get('recommendation', '')}\n"
+            f"📌 {recommendation}\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         )
 
@@ -439,6 +473,14 @@ def main():
         all_recommended.extend(entries_list)
 
     combined_msg = cluster_header + sector_report + "\n\n".join(all_messages)
+
+    # 三策略全空时，增加明确警告（避免用户误以为系统出故障）
+    if total_recommendations == 0:
+        combined_msg += (
+            "\n\n⚠️ 市场极度弱势，三策略均无推荐\n"
+            "   · 建议空仓观望，等待大盘评分回升至 3/7 以上\n"
+            "   · 或手动筛选超跌反弹标的（跌幅>20%+MACD金叉）\n"
+        )
 
     if all_recommended:
         try:

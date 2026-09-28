@@ -456,6 +456,10 @@ class Scanner:
             else:
                 reject_reasons[reason] += 1
         LOG.info(f"硬过滤通过 {len(passed)} 只，拒绝 {len(enriched) - len(passed)} 只")
+        if len(passed) == 0:
+            LOG.warning(f"⚠️ 硬过滤后剩 0 只（初筛{len(candidates)}只全部被拒），"
+                        f"可能原因：市场极度弱势/数据源异常/过滤条件过严")
+            LOG.warning(f"   拒绝原因统计：{dict(reject_reasons.most_common())}")
         top_rejects = [r for r, _ in reject_reasons.most_common(3)]
 
         # 4. 多周期信号分析（并发 + 0.3s 间隔限速）
