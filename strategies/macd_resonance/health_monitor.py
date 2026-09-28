@@ -58,6 +58,8 @@ class HealthMonitor:
             "last_recommendation_date": None,
             "degradation_history": [],
             "recovery_history": [],
+            "anomaly_count": 0,            # 数据异常累计次数
+            "anomaly_history": [],         # [{date, reason, details}]
             "updated_at": None,
         }
 
@@ -88,6 +90,28 @@ class HealthMonitor:
             self._check_degradation()
 
         self._save_state()
+
+    def record_anomaly(self, anomaly_type: str, details: dict = None, date: str = None):
+        """记录数据异常（如硬过滤0只、数据源超时等）。
+
+        与 record_recommendations 独立：异常时仍记录推荐数（可能为0），
+        但额外标记异常类型，供后续诊断和飞书告警使用。
+        """
+        if date is None:
+            date = now_bjt().strftime("%Y-%m-%d")
+
+        self.state["anomaly_count"] = self.state.get("anomaly_count", 0) + 1
+        self.state.setdefault("anomaly_history", []).append({
+            "date": date,
+            "type": anomaly_type,
+            "details": details or {},
+            "timestamp": now_bjt().strftime("%Y-%m-%d %H:%M:%S"),
+        })
+        # 只保留最近50条异常记录
+        if len(self.state["anomaly_history"]) > 50:
+            self.state["anomaly_history"] = self.state["anomaly_history"][-50:]
+        self._save_state()
+        print(f"⚠️ 数据异常记录：{anomaly_type}（累计{self.state['anomaly_count']}次）")
 
     def _recompute_zero_days(self):
         """从 daily_recommendations 推导「连续0推荐」天数（幂等）。

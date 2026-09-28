@@ -476,11 +476,24 @@ def main():
 
     # 三策略全空时，增加明确警告（避免用户误以为系统出故障）
     if total_recommendations == 0:
-        combined_msg += (
-            "\n\n⚠️ 市场极度弱势，三策略均无推荐\n"
-            "   · 建议空仓观望，等待大盘评分回升至 3/7 以上\n"
-            "   · 或手动筛选超跌反弹标的（跌幅>20%+MACD金叉）\n"
-        )
+        # 检查是否有数据异常（硬过滤0只）
+        if result.get("data_anomaly"):
+            anomaly_reason = result.get("anomaly_reason", "未知原因")
+            anomaly_details = result.get("anomaly_details", {})
+            top_reason = list(anomaly_details.keys())[0] if anomaly_details else "未知"
+            combined_msg += (
+                f"\n\n🚨 数据异常告警\n"
+                f"   · {anomaly_reason}\n"
+                f"   · 最可能原因：{top_reason}\n"
+                f"   · 建议检查东财接口是否正常，或等待下次推送\n"
+                f"   · 本次推送数据可能不准确，请勿据此交易\n"
+            )
+        else:
+            combined_msg += (
+                "\n\n⚠️ 市场极度弱势，三策略均无推荐\n"
+                "   · 建议空仓观望，等待大盘评分回升至 3/7 以上\n"
+                "   · 或手动筛选超跌反弹标的（跌幅>20%+MACD金叉）\n"
+            )
 
     if all_recommended:
         try:
@@ -504,6 +517,17 @@ def main():
     try:
         bjt_date = now_bjt().strftime("%Y-%m-%d")
         health.record_recommendations(len(all_recommended), date=bjt_date)
+        # 记录数据异常（硬过滤0只）
+        if result.get("data_anomaly"):
+            health.record_anomaly(
+                anomaly_type="硬过滤0只",
+                details={
+                    "passed_count": result.get("passed_count", 0),
+                    "candidates_count": result.get("candidates_count", 0),
+                    "anomaly_reason": result.get("anomaly_reason", ""),
+                },
+                date=bjt_date,
+            )
         new_level = health.get_current_params_override()["level"]
         print(f"[健康度] {bjt_date} 累计推荐 {len(all_recommended)} 只 → 降级 Level {new_level}"
               f"{'（下一档扫描开始生效）' if new_level > param_override['level'] else ''}")

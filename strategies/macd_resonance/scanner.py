@@ -460,6 +460,10 @@ class Scanner:
             LOG.warning(f"⚠️ 硬过滤后剩 0 只（初筛{len(candidates)}只全部被拒），"
                         f"可能原因：市场极度弱势/数据源异常/过滤条件过严")
             LOG.warning(f"   拒绝原因统计：{dict(reject_reasons.most_common())}")
+            # 标记数据异常：硬过滤0只可能是数据源返回了错误数据（price=0/cap=0）
+            result["data_anomaly"] = True
+            result["anomaly_reason"] = f"硬过滤0只（初筛{len(candidates)}只全部被拒）"
+            result["anomaly_details"] = dict(reject_reasons.most_common(5))
         top_rejects = [r for r, _ in reject_reasons.most_common(3)]
 
         # 4. 多周期信号分析（并发 + 0.3s 间隔限速）
