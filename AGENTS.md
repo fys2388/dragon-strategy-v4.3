@@ -26,8 +26,10 @@ A 股 **MACD 多周期共振**短线选股系统（日线 + 60min + 30min + 15mi
    调用 `workflow_dispatch` 完成 —— 实测调度到运行延迟约 **15 秒**（Worker 远快于 GitHub cron）。
 3. **只留 `workflow_dispatch` 的 4 个交易时段工作流**：`strategy_cloud_deploy.yml`、
    `morning_noon_push.yml`、`strategy-push.yml`、`evening_review.yml`。
-   `weekly_*`、`daily_position_monitor.yml`、`scheduler_health_check.yml` 保留了 `schedule`，
+   `weekly_*`、`scheduler_health_check.yml` 保留了 `schedule`，
    属有意为之（它们不发交易推送，延迟几小时可接受），不要动。
+   `daily_position_monitor.yml` 的定时已于 **2026-09-29 按用户要求停用**（仅留 `workflow_dispatch`），
+   不要擅自加回 `schedule`。
    特别注意：`scheduler_health_check.yml` 的 schedule 是**监控系统本身**（见坑 12），删掉就等于取消监控。
 4. **报告类型由 `REPORT_MODE` 决定，不要改回硬编码**：
    `premarket`=盘前报告（只发大盘概况+昨日回顾+持仓提醒，**不扫描**）；`scan`=盘中扫描。
@@ -61,7 +63,7 @@ scripts/
   morning_noon_push.yml         已停定时，手动兜底
   strategy-push.yml           旧工作流，已停定时
   evening_review.yml        收盘复盘（已停定时，Worker 15:30 触发）
-  daily_position_monitor.yml    14:00 持仓监控（保留 schedule）
+  daily_position_monitor.yml    持仓监控（定时已停用，仅 workflow_dispatch）
   scheduler_health_check.yml    15:00 调度器健康检查（保留 schedule，监控 Worker/GITHUB_TOKEN 停摆）
   weekly_{performance,optimization,training,evolution}.yml  周日任务（保留 schedule）
   weekly_replay_validation.yml  周日 23:00 历史回放验证（保留 schedule，周报类；手动档默认不推飞书）

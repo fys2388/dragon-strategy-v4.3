@@ -78,9 +78,12 @@
 **GitHub Actions 上没有任何 `schedule` 在跑交易时段推送。** 唯一自动触发源是 Cloudflare Worker。
 
 保留 `schedule` 的工作流（有意为之，延迟可接受）：
-- `daily_position_monitor.yml` — `0 6 * * 1-5`（14:00 BJT）
 - `weekly_performance.yml` `0 12 * * 0` / `weekly_optimization.yml` `0 13 * * 0` /
   `weekly_model_training.yml` `0 13 * * 0` / `weekly_evolution.yml` `0 14 * * 0`
+
+已停用的 `schedule`（勿擅自加回）：
+- `daily_position_monitor.yml` — 原 `0 6 * * 1-5`（14:00 BJT，实测 18:20-20:10 BJT 才执行），
+  **2026-09-29 按用户要求取消持仓监控**，现仅保留 `workflow_dispatch` 手动档。
 
 ---
 
