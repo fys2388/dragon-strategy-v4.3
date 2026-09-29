@@ -154,7 +154,7 @@ def build_review_report() -> str:
         scans = len(records)
         lines.append(f"  扫描{scans}次 | 今日推荐标的{len(entries_today)}只（信号{sum(len(r.get('entries', [])) for r in records)}次）")
         if entries_today:
-            for e in entries_today[:5]:
+            for e in entries_today[:8]:
                 lines.append(f"  • {e.get('name')}({e.get('code')}) @ {e.get('price')}元 得分{e.get('score')}")
     lines.append("")
 
@@ -176,6 +176,8 @@ def build_review_report() -> str:
     else:
         codes = sorted({str(e["code"]) for e in entries if e.get("code")})
         quotes = ds.get_realtime_quotes(codes) if codes else {}
+        failed_count = 0
+        total_count = len(entries[:8])
         for e in entries[:8]:
             code = str(e.get("code", ""))
             entry_price = float(e.get("price") or 0)
@@ -186,6 +188,14 @@ def build_review_report() -> str:
                 lines.append(f"  {icon} {e.get('name')}({code}) 推荐{e.get('price')} → 现价{latest:.2f} ({ret:+.1f}%)")
             else:
                 lines.append(f"  ⚪ {e.get('name')}({code}) 最新价获取失败")
+                failed_count += 1
+        # 如果所有股票都获取失败，提示数据异常
+        if total_count > 0 and failed_count == total_count:
+            lines.append("")
+            lines.append("🚨 数据异常告警")
+            lines.append("   · 所有推荐标的最新价获取失败")
+            lines.append("   · 可能原因：收盘后数据源关闭，或行情接口异常")
+            lines.append("   · 本次复盘数据可能不准确，请勿据此交易")
     lines.append("")
 
     # 4. 持仓盈亏
