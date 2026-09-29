@@ -1,0 +1,53 @@
+{
+  "trained_at": "2026-09-27 17:36:50",
+  "n_clusters": 6,
+  "sample_count": 280,
+  "cluster_stats": {
+    "0": {
+      "count": 56,
+      "avg_return_20d": 1.34,
+      "avg_volatility": 0.82,
+      "avg_amplitude": 4.91
+    },
+    "1": {
+      "count": 26,
+      "avg_return_20d": -5.71,
+      "avg_volatility": 1.24,
+      "avg_amplitude": 9.08
+    },
+    "2": {
+      "count": 61,
+      "avg_return_20d": 2.86,
+      "avg_volatility": 0.71,
+      "avg_amplitude": 5.09
+    },
+    "3": {
+      "count": 84,
+      "avg_return_20d": -0.35,
+      "avg_volatility": 0.86,
+      "avg_amplitude": 4.91
+    },
+    "4": {
+      "count": 28,
+      "avg_return_20d": 6.13,
+      "avg_volatility": 0.65,
+      "avg_amplitude": 7.79
+    },
+    "5": {
+      "count": 25,
+      "avg_return_20d": -1.42,
+      "avg_volatility": 1.25,
+      "avg_amplitude": 7.62
+    }
+  },
+  "feature_names": [
+    "return_20d",
+    "return_5d",
+    "volatility",
+    "amplitude",
+    "volume_ratio",
+    "limit_up_down_ratio",
+    "limit_up_count",
+    "volume_yi"
+  ]
+}

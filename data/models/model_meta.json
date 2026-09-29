@@ -1,0 +1,106 @@
+{
+  "status": "ok",
+  "trained_at": "2026-09-27 17:36:37",
+  "sample_count": 6400,
+  "positive_count": 1900,
+  "negative_count": 4500,
+  "accuracy": 71.25,
+  "auc": 0.5142,
+  "stock_count": 25,
+  "days": 250,
+  "feature_names": [
+    "return_1d",
+    "return_3d",
+    "return_5d",
+    "return_10d",
+    "volatility_5d",
+    "volatility_10d",
+    "amplitude_5d",
+    "amplitude_20d",
+    "ma5_deviation",
+    "ma10_deviation",
+    "ma20_deviation",
+    "ma5_slope",
+    "ma10_slope",
+    "ma_bullish",
+    "macd_dif",
+    "macd_dea",
+    "macd_hist",
+    "macd_golden_cross",
+    "macd_above_zero",
+    "rsi_6",
+    "rsi_12",
+    "rsi_24",
+    "rsi_overbought",
+    "rsi_oversold",
+    "boll_position",
+    "boll_width",
+    "boll_break_upper",
+    "boll_break_lower",
+    "volume_ratio_5d",
+    "volume_change_1d",
+    "volume_trend",
+    "price_volume_divergence",
+    "new_high_20d",
+    "new_low_20d",
+    "consecutive_up",
+    "consecutive_down"
+  ],
+  "top_features": [
+    {
+      "feature": "amplitude_20d",
+      "importance": 74.56
+    },
+    {
+      "feature": "volatility_10d",
+      "importance": 72.42
+    },
+    {
+      "feature": "rsi_24",
+      "importance": 52.17
+    },
+    {
+      "feature": "ma10_slope",
+      "importance": 46.1
+    },
+    {
+      "feature": "boll_position",
+      "importance": 45.34
+    },
+    {
+      "feature": "macd_dif",
+      "importance": 34.94
+    },
+    {
+      "feature": "macd_dea",
+      "importance": 18.19
+    },
+    {
+      "feature": "rsi_6",
+      "importance": 18.04
+    },
+    {
+      "feature": "return_5d",
+      "importance": 14.95
+    },
+    {
+      "feature": "amplitude_5d",
+      "importance": 13.63
+    }
+  ],
+  "params": {
+    "objective": "binary",
+    "metric": "binary_logloss",
+    "boosting_type": "gbdt",
+    "num_leaves": 31,
+    "learning_rate": 0.05,
+    "feature_fraction": 0.8,
+    "bagging_fraction": 0.8,
+    "bagging_freq": 5,
+    "verbose": -1,
+    "min_data_in_leaf": 20,
+    "max_depth": 6,
+    "reg_alpha": 0.1,
+    "reg_lambda": 0.1
+  }
+}
