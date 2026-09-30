@@ -7,12 +7,20 @@
     "2026-09-24": 3,
     "2026-09-25": 3,
     "2026-09-28": 0,
-    "2026-09-29": 0
+    "2026-09-29": 0,
+    "2026-09-30": 0
   },
-  "consecutive_zero_days": 2,
-  "degradation_level": 0,
+  "consecutive_zero_days": 3,
+  "degradation_level": 1,
   "last_recommendation_date": "2026-09-25",
-  "degradation_history": [],
+  "degradation_history": [
+    {
+      "date": "2026-09-30 10:02:14",
+      "from_level": 0,
+      "to_level": 1,
+      "reason": "连续3天0推荐"
+    }
+  ],
   "recovery_history": [],
-  "updated_at": "2026-09-29 14:51:01"
+  "updated_at": "2026-09-30 10:02:19"
 }
