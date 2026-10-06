@@ -295,6 +295,18 @@ class ReplayEngine:
         return "\n".join(lines)
 
 
-def init_replay_engine() -> ReplayEngine:
-    """初始化回放引擎。"""
-    return ReplayEngine()
+def init_replay_engine(initial_capital: float = 10000.0,
+                       commission_rate: float = 0.00025,
+                       stamp_tax_rate: float = 0.001,
+                       slippage_rate: float = 0.001) -> ReplayEngine:
+    """初始化回放引擎。
+
+    参数透传给 ReplayEngine，便于调用方按场景调整资金/费率
+    （如 scripts/replay_validation.py 按 1 万本金验证）。
+    """
+    return ReplayEngine(
+        initial_capital=initial_capital,
+        commission_rate=commission_rate,
+        stamp_tax_rate=stamp_tax_rate,
+        slippage_rate=slippage_rate,
+    )

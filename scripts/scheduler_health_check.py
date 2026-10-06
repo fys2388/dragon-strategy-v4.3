@@ -71,6 +71,36 @@ REPO = os.environ.get("GH_REPO", "fys2388/dragon-strategy-v4.3")
 PUSH_WORKFLOW = "strategy_cloud_deploy.yml"   # 盘中/盘前推送
 REVIEW_WORKFLOW = "evening_review.yml"        # 收盘复盘
 
+# A 股休市日（法定节假日）。与 cloudflare-worker/worker.js 的 HOLIDAYS 保持逐字一致，
+# 每年年底同步更新。本脚本刻意不 import strategies.macd_resonance.trading_calendar
+# （会拖进 pandas/numpy），改为在此内置一份纯日期表，维持轻量（只依赖 requests）。
+# 周末由 completed_weekdays 的 weekday() 判断排除，这里只列法定休市日。
+HOLIDAYS: set = {
+    # 2026
+    "2026-01-01", "2026-01-02", "2026-01-03",
+    "2026-02-16", "2026-02-17", "2026-02-18", "2026-02-19", "2026-02-20",
+    "2026-04-03", "2026-04-04", "2026-04-05",
+    "2026-05-01", "2026-05-02", "2026-05-03", "2026-05-04",
+    "2026-06-19", "2026-06-20", "2026-06-21",
+    "2026-09-25", "2026-09-26", "2026-09-27",
+    "2026-10-01", "2026-10-02", "2026-10-05", "2026-10-06", "2026-10-07",
+    # 2027
+    "2027-01-01", "2027-01-02", "2027-01-04",
+    "2027-02-08", "2027-02-10", "2027-02-11", "2027-02-12", "2027-02-13",
+    "2027-04-04", "2027-04-05",
+    "2027-05-01", "2027-05-03", "2027-05-04", "2027-05-05",
+    "2027-06-09", "2027-06-10", "2027-06-11",
+    "2027-09-15", "2027-09-16", "2027-09-17",
+    "2027-10-01", "2027-10-04", "2027-10-05", "2027-10-06", "2027-10-07",
+}
+
+
+def is_market_closed(d: date) -> bool:
+    """是否为 A 股休市日（周末或法定节假日）。与 worker.js 的跳过行为对齐。"""
+    if d.weekday() >= 5:
+        return True
+    return d.isoformat() in HOLIDAYS
+
 # 期望值与 cloudflare-worker/worker.js 的 SCHEDULE 一一对应，改节奏时同步改这里。
 EXPECTED_PUSH_PER_DAY = 10    # 9:15 盘前 1 次 + 盘中 9 档（10:00~14:30 各30分钟 + 14:45 尾盘）
 EXPECTED_REVIEW_PER_DAY = 1   # 15:30 复盘
@@ -79,6 +109,34 @@ CHECK_DAYS = 3                # 回看最近 N 个完整交易日
 API_BASE = "https://api.github.com"
 API_VERSION = "2022-11-28"
 USER_AGENT = "macd-scheduler-health-check"
+
+# ── 补档（catchup）配置 ──────────────────────────────────────────────────
+# 交易档位的调度表（北京时间）。改 cloudflare-worker/worker.js 的 SCHEDULE 时，
+# 必须同步改这里 —— 否则「已存在 workflow_dispatch 运行」的判定时基会错。
+# 结构: (hour, minute, label)；label 会写进 data/scheduler_remediation.jsonl。
+PUSH_SLOTS = [
+    (9, 15, "盘前报告"),
+    (10, 0, "上午盘中"),
+    (10, 30, "上午盘中"),
+    (11, 0, "上午盘中"),
+    (11, 30, "上午盘中"),
+    (13, 0, "下午盘中"),
+    (13, 30, "下午盘中"),
+    (14, 0, "下午盘中"),
+    (14, 30, "下午盘中"),
+    (14, 45, "尾盘扫描"),
+]
+REVIEW_SLOTS = [
+    (15, 30, "收盘复盘"),
+]
+
+# 档位原定时点后，允许补发的宽限窗口（分钟）。
+# 取 30：scheduler_catchup.yml 按 15 分钟一次跑，一档漏发后最多 15 分钟就能被
+# 下一次检查发现并补；再留 15 分钟给补发调用本身与飞书链路。
+CATCHUP_WINDOW_MINUTES = 30
+
+# 幂等日志（append-only JSONL），每次补发/拒绝补发都落一行，便于事后审计。
+REMEDIATION_LOG = "data/scheduler_remediation.jsonl"
 
 # 心跳陈旧阈值。本工作流 cron 定 15:00 BJT，实测延迟 ~4.5h → 约 19:30 BJT 执行，
 # 当日最后一个档位是 15:30 复盘。6.0h 意味着「最后成功 dispatch 在 13:30 BJT 之后」
@@ -105,16 +163,17 @@ def day_label(d: date) -> str:
 
 
 def completed_weekdays(n: int, ref: Optional[date] = None) -> List[date]:
-    """最近 n 个「已完整结束」的工作日（不含 ref 当天），旧 → 新。
+    """最近 n 个「已完整结束」的 A 股交易日（不含 ref 当天），旧 → 新。
 
-    只排除周六日，不处理 A 股节假日：Worker 也不检查节假日，节假日照样触发，
-    所以按运行次数判定不会误报。
+    排除周六日 + 法定节假日（is_market_closed，与 worker.js 的跳过行为对齐）：
+    Worker 在休市日不触发任何档位，若把休市日算进「完整交易日」，会因 0 次
+    dispatch 误报停推（heartbeat_stale 也会在这个空窗期误触发）。
     """
     ref = ref or now_bjt().date()
     days: List[date] = []
     d = ref - timedelta(days=1)
     while len(days) < n:
-        if d.weekday() < 5:
+        if not is_market_closed(d):
             days.append(d)
         d -= timedelta(days=1)
     return days
@@ -147,6 +206,271 @@ def _api_get(token: str, path: str, retries: int = 3) -> dict:
         if attempt < retries - 1:
             time.sleep(2 ** attempt)
     raise ApiError(f"{path} 重试 {retries} 次仍失败")
+
+
+def _api_post(token: str, path: str, body: dict) -> Dict:
+    """POST /repos/{REPO}{path}。返回响应 JSON；网络/HTTP 失败返回 {"_error": ...}。
+
+    这里刻意不复用 _api_get：POST 有副作用（真的会触发 workflow），
+    失败不能重试到抛异常，得让上层看到并做降级处理。
+    """
+    import requests
+
+    url = f"{API_BASE}/repos/{REPO}{path}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": API_VERSION,
+        "User-Agent": USER_AGENT,
+    }
+    try:
+        resp = requests.post(url, headers=headers, json=body, timeout=15)
+    except Exception as e:
+        return {"_error": f"{type(e).__name__} {e}"}
+    # POST /dispatches 成功返回 202 Accepted（body 为空），
+    # 也接受 200/201/204 兼容其他端点。
+    if resp.status_code in (200, 201, 202, 204):
+        return {"_status": resp.status_code}
+    return {"_status": resp.status_code, "_error": (resp.text or "")[:200]}
+
+
+def _dispatch_workflow(token: str, workflow_file: str,
+                       report_mode: Optional[str] = None) -> Dict:
+    """POST /dispatches 触发一次 workflow_dispatch。
+
+    report_mode 只用于 strategy_cloud_deploy.yml（premarket / scan）；
+    evening_review.yml 无 inputs，不传。
+    """
+    ref = "refs/heads/main"
+    inputs: Dict = {}
+    if report_mode:
+        inputs["report_mode"] = report_mode
+    return _api_post(token,
+                     f"/actions/workflows/{workflow_file}/dispatches",
+                     {"ref": ref, "inputs": inputs})
+
+
+def _record_catchup(event_type: str, day: date, hour: int, minute: int,
+                    label: str, workflow: str, report_mode: Optional[str],
+                    reason: str, log_dir: Optional[str] = None) -> None:
+    """追加一行 JSONL 到 REMEDIATION_LOG。失败不抛（审计日志不应阻断主流程）。
+
+    log_dir 参数仅用于测试注入（默认取脚本所在目录的父目录 = 项目根）。
+    """
+    import json
+    from pathlib import Path
+
+    if log_dir is not None:
+        base = Path(log_dir)
+    else:
+        base = Path(__file__).resolve().parent.parent
+    log_path = base / REMEDIATION_LOG
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    rec = {
+        "ts_bjt": now_bjt().strftime("%Y-%m-%d %H:%M:%S"),
+        "day": day.isoformat(),
+        "slot": f"{hour:02d}:{minute:02d}",
+        "label": label,
+        "workflow": workflow,
+        "report_mode": report_mode,
+        "event": event_type,   # caught_up / skipped_no_window / skipped_already_exists / dispatch_failed
+        "reason": reason,
+    }
+    try:
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception as e:
+        print(f"   ⚠️ 补档审计日志写入失败：{type(e).__name__} {e}")
+
+
+def _dispatches_by_day(token: str, workflow_file: str, ref_day: date,
+                       days: int = 3) -> Dict[date, List]:
+    """批量取最近 days 个自然日的 workflow_dispatch 运行记录，按 UTC 自然日 group。
+
+    用一次 API 调用替代每交易日一次调用，减少限流概率。
+    失败返回空 dict（调用方按「查不到」处理，不参与判定）。
+    """
+    import json as _json  # noqa: F401
+    from collections import defaultdict
+    from datetime import timedelta
+
+    created_from = (ref_day - timedelta(days=days - 1)).isoformat()
+    created_to = ref_day.isoformat()
+    try:
+        data = _api_get(token,
+                        f"/actions/workflows/{workflow_file}/runs"
+                        f"?created={created_from}T00:00:00Z..{created_to}T23:59:59Z"
+                        f"&per_page=100")
+    except ApiError:
+        return {}
+    if data.get("_404"):
+        return {}
+    runs = [r for r in data.get("workflow_runs", [])
+            if r.get("event") == "workflow_dispatch"]
+    grouped: Dict[date, List] = defaultdict(list)
+    for r in runs:
+        created_at = r.get("created_at", "")
+        if len(created_at) >= 10:
+            grouped[date.fromisoformat(created_at[:10])].append(r)
+    return grouped
+
+
+def _build_slot_results(now: datetime, push_today: List, review_today: List) -> List[Dict]:
+    """构造补档结果列表：按档位遍历，标记 should_run（是否在宽限窗口内）。
+
+    窗口语义：`0 <= (now - slot_scheduled) <= CATCHUP_WINDOW_MINUTES 分钟`。
+    即档位已过、但还在补发宽限期内；已过窗口的历史漏发一律不补（避免"迟到推送"）。
+
+    拆成独立函数便于单测：check_today 负责调 API + 传 now，_build_slot_results
+    只做「给定 runs 与当前时间 → 结果列表」的纯计算。
+    """
+    now_min = now.hour * 60 + now.minute
+    results: List[Dict] = []
+    for h, m, label in PUSH_SLOTS:
+        slot_min = h * 60 + m
+        delay = now_min - slot_min
+        in_window = 0 <= delay <= CATCHUP_WINDOW_MINUTES
+        results.append({
+            "kind": "push",
+            "hour": h, "minute": m, "label": label,
+            "workflow": PUSH_WORKFLOW,
+            "report_mode": "premarket" if (h, m) == (9, 15) else "scan",
+            "should_run": in_window,
+            "existing_count": len(push_today),
+            "existing_runs": push_today,
+        })
+    for h, m, label in REVIEW_SLOTS:
+        slot_min = h * 60 + m
+        delay = now_min - slot_min
+        in_window = 0 <= delay <= CATCHUP_WINDOW_MINUTES
+        results.append({
+            "kind": "review",
+            "hour": h, "minute": m, "label": label,
+            "workflow": REVIEW_WORKFLOW,
+            "report_mode": None,
+            "should_run": in_window,
+            "existing_count": len(review_today),
+            "existing_runs": review_today,
+        })
+    return results
+
+
+def check_today(token: str, ref_day: Optional[date] = None,
+                now: Optional[datetime] = None) -> Tuple[date, List[Dict]]:
+    """判断 ref_day（默认今天）当天是否已完整结束；未结束则返回需要补的档位。
+
+    返回 (day, results)：
+      results 每项 = {"kind": "push"|"review", "hour", "minute", "label",
+                      "workflow", "report_mode", "should_run", "existing_count",
+                      "existing_runs"}
+      should_run=True 表示这个档位仍在宽限窗口内（可以补）；
+      should_run=False 表示该档位已过窗口或还没到，不参与本次判定。
+      existing_count 是当天该工作流已记录的 workflow_dispatch 次数。
+
+    now 参数只用于测试注入（默认取 now_bjt()）；生产路径不会传。
+    """
+    day = ref_day or (now or now_bjt()).date()
+    now_dt = now or now_bjt()
+    push_runs = _dispatches_by_day(token, PUSH_WORKFLOW, day, days=1)
+    review_runs = _dispatches_by_day(token, REVIEW_WORKFLOW, day, days=1)
+    push_today = push_runs.get(day, [])
+    review_today = review_runs.get(day, [])
+    return day, _build_slot_results(now_dt, push_today, review_today)
+
+
+def _slot_already_dispatched(slot, push_today: List, review_today: List) -> bool:
+    """判断某个具体 (hour, minute) 档位是否已有对应的 workflow_dispatch 运行。
+
+    判定依据：workflow_dispatch 运行的 created_at 落在档位时间 ±15 分钟内
+    （Worker Cron 每 15 分钟触发一次，档位与触发点的偏差不超过 0 分钟）。
+    这是「细粒度」幂等：如果 10:00 档发了但 10:30 档漏了，只补 10:30，不重复。
+    """
+    h, m = slot["hour"], slot["minute"]
+    target = (h * 60 + m)
+    runs = push_today if slot["kind"] == "push" else review_today
+    for r in runs:
+        created_at = r.get("created_at", "")
+        if len(created_at) < 19:
+            continue
+        # GitHub 返回 UTC ISO: "2026-09-22T02:00:11Z" → 转 BJT
+        try:
+            dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        dt_bjt = dt.astimezone(timezone(timedelta(hours=8)))
+        slot_min = dt_bjt.hour * 60 + dt_bjt.minute
+        if abs(slot_min - target) <= 15:
+            return True
+    return False
+
+
+def attempt_catchup(token: str, day: date, results: List[Dict],
+                    dry_run: bool = False) -> List[Dict]:
+    """对漏发档位发起补发。返回本次操作的事件列表（含跳过原因）。
+
+    设计要点：
+      - 每档只补 1 次：由 _slot_already_dispatched 幂等，不重复触发。
+      - 宽限窗口外不补：避免历史漏发被在今天补成"迟到推送"污染。
+      - 失败不重试：只落审计日志，让告警通道提醒人工。
+      - dry_run 时不实际 POST，但仍落审计事件（event=dry_run）。
+    """
+    events: List[Dict] = []
+    if not results:
+        return events
+
+    # 幂等分组：push 档用 PUSH_WORKFLOW 的 runs，review 档用 REVIEW_WORKFLOW 的 runs
+    push_runs = results[0]["existing_runs"] if results else []
+    review_runs = []
+    for r in results:
+        if r.get("kind") == "review" and r.get("existing_runs"):
+            review_runs = r["existing_runs"]
+            break
+
+    for slot in results:
+        if not slot.get("should_run"):
+            continue  # 不在宽限窗口，直接忽略（不写审计）
+        already = _slot_already_dispatched(slot, push_runs, review_runs)
+        if already:
+            _record_catchup("skipped_already_exists", day,
+                            slot["hour"], slot["minute"], slot["label"],
+                            slot["workflow"], slot["report_mode"],
+                            "该档位已有 workflow_dispatch 运行")
+            events.append({"slot": f"{slot['hour']:02d}:{slot['minute']:02d}",
+                           "label": slot["label"], "event": "skipped_already_exists"})
+            continue
+
+        if dry_run:
+            print(f"   🔍 dry-run: 将补发 {slot['label']} "
+                  f"({slot['workflow']}, report_mode={slot['report_mode']})")
+            _record_catchup("dry_run", day,
+                            slot["hour"], slot["minute"], slot["label"],
+                            slot["workflow"], slot["report_mode"],
+                            "dry-run 模式，未实际 POST")
+            events.append({"slot": f"{slot['hour']:02d}:{slot['minute']:02d}",
+                           "label": slot["label"], "event": "dry_run"})
+            continue
+
+        result = _dispatch_workflow(token, slot["workflow"], slot["report_mode"])
+        err = result.get("_error")
+        status = result.get("_status")
+        if err:
+            print(f"   ❌ 补发失败 {slot['label']} HTTP {status}: {err[:120]}")
+            _record_catchup("dispatch_failed", day,
+                            slot["hour"], slot["minute"], slot["label"],
+                            slot["workflow"], slot["report_mode"],
+                            f"HTTP {status} {err}")
+            events.append({"slot": f"{slot['hour']:02d}:{slot['minute']:02d}",
+                           "label": slot["label"], "event": "dispatch_failed",
+                           "status": status, "error": err[:120]})
+        else:
+            print(f"   ✅ 已补发 {slot['label']} (HTTP {status})")
+            _record_catchup("caught_up", day,
+                            slot["hour"], slot["minute"], slot["label"],
+                            slot["workflow"], slot["report_mode"],
+                            "补发成功")
+            events.append({"slot": f"{slot['hour']:02d}:{slot['minute']:02d}",
+                           "label": slot["label"], "event": "caught_up"})
+    return events
 
 
 def fetch_dispatch_runs(token: str, workflow_file: str, day: date) -> Dict:
@@ -262,11 +586,15 @@ def fetch_worker_heartbeat(url: str, retries: int = 2) -> Optional[Dict]:
     return None
 
 
-def heartbeat_problems(hb: Dict, per_day: List[Dict]) -> List[Tuple[str, str, str]]:
+def heartbeat_problems(hb: Dict, per_day: List[Dict],
+                       now: Optional[datetime] = None) -> List[Tuple[str, str, str]]:
     """比对 Worker 心跳与 GitHub 运行记录，产出可区分的告警。
 
     hb 为 /health 响应体。时间戳统一按 UTC 毫秒比较（Date.now() 就是 UTC 毫秒）。
+    now 用于判断「最近有推送义务的交易日 15:30」，避免把休市/周末空档误判为
+    Worker 停摆（详见坑 12）。
     """
+    now = now or now_bjt()
     problems: List[Tuple[str, str, str]] = []
     last_dispatch = hb.get("last_dispatch") or {}
     last_failure = hb.get("last_failure") or {}
@@ -302,6 +630,11 @@ def heartbeat_problems(hb: Dict, per_day: List[Dict]) -> List[Tuple[str, str, st
                          f"HTTP {status}，{fail_age:.1f} 小时前）{hint}"))
 
     # 2) 没有任何近期成功记录 → Worker 本身没在跑
+    # 3) 心跳新鲜但 GitHub 侧一次都没跑 → 问题在 GitHub，不在 Worker。
+    #    这两类判定都只在「有档位义务」的交易日当天有意义：
+    #    休市日/周末没有档位，固定 6h 阈值必然把正常长空档误判为停摆（坑 12），
+    #    故检查时刻落在休市日时，整段心跳比对直接跳过，由上面的 per-day 运行
+    #    次数（evaluate）负责「该不该推送」。
     dispatch_age = age_hours(last_dispatch)
     if dispatch_age is None:
         # KV 里还没有任何成功记录：通常是刚部署完、或今天还没到第一个档位（9:15）。
@@ -309,13 +642,24 @@ def heartbeat_problems(hb: Dict, per_day: List[Dict]) -> List[Tuple[str, str, st
         # 「Worker 从来没 dispatch 过」这种情况由上面的 silent 分支（按运行次数判定）兜住。
         print("   ⚠️ Worker 心跳里还没有成功的 dispatch 记录"
               "（可能刚部署，或今天还没到 9:15 档），跳过陈旧判定")
-    elif dispatch_age > MAX_HEARTBEAT_AGE_H:
+        return problems
+
+    if is_market_closed(now.date()):
+        # 休市日/周末：正常空档，不做任何心跳告警（既不比陈旧，也不比未接单）。
+        if dispatch_age > MAX_HEARTBEAT_AGE_H:
+            print(f"   ℹ️ 检查时刻 {now:%m-%d %H:%M}（北京时间）落在休市日/周末，"
+                  f"心跳最后成功 dispatch={beijing_time(last_dispatch)}（{dispatch_age:.1f}h 前）"
+                  f"属正常空档，跳过心跳告警")
+        return problems
+
+    # 交易日当天：
+    if dispatch_age > MAX_HEARTBEAT_AGE_H:
         problems.append(("🚨", "heartbeat_stale",
                          f"Worker 最近 {MAX_HEARTBEAT_AGE_H:.1f} 小时内没有成功的 dispatch 记录"
                          f"（最后成功：{beijing_time(last_dispatch)}）→ "
                          f"Worker 未运行/被暂停/被删除，或 Cron 触发器丢失"))
     else:
-        # 3) 心跳新鲜但 GitHub 侧一次都没跑 → 问题在 GitHub，不在 Worker。
+        # 心跳新鲜但 GitHub 侧一次都没跑 → 问题在 GitHub，不在 Worker。
         # 只在「确实查到了可信的 GitHub 运行记录」时才判，否则会把
         # 「检查器自己查不到」误报成「GitHub 未接单」。
         reliable = [r for r in per_day if not r.get("push_error")]
@@ -519,6 +863,10 @@ def main() -> int:
     parser.add_argument("--always-report", action="store_true", help="正常时也推送报告（验证飞书链路）")
     parser.add_argument("--dry-run", action="store_true", help="只打印，不推送飞书")
     parser.add_argument("--selftest", action="store_true", help="打印模拟告警文案后退出（不发网络请求）")
+    parser.add_argument("--catchup", action="store_true",
+                        help="补档模式：对今天在宽限窗口内漏发的档位自动 POST /dispatches（幂等）")
+    parser.add_argument("--no-catchup-push", action="store_true",
+                        help="补档后不额外推送飞书（默认推送，便于人工确认补档已发生）")
     args = parser.parse_args()
 
     if args.selftest:
@@ -530,8 +878,43 @@ def main() -> int:
         print("❌ 缺少 GITHUB_TOKEN（需 actions: read 权限）")
         return 1
 
-    always_report = args.always_report or os.environ.get("ALWAYS_REPORT", "").lower() == "true"
     now = now_bjt()
+
+    # ── 补档分支：只处理「今天已知的漏发档」，不做历史日评估 ──
+    if args.catchup:
+        print("=" * 56)
+        print(f"🔧 调度器补档  {now:%Y-%m-%d %H:%M} 北京时间")
+        print(f"   仓库 {REPO}，宽限窗口 {CATCHUP_WINDOW_MINUTES} 分钟")
+        print("=" * 56)
+        day, results = check_today(token, now.date())
+        events = attempt_catchup(token, day, results, dry_run=args.dry_run)
+        caught_up = [e for e in events if e["event"] in ("caught_up", "dry_run")]
+        failed = [e for e in events if e["event"] == "dispatch_failed"]
+
+        # 构造补档结果推送（独立于 evaluate 的报告格式，因为这里没有 per_day 数据）
+        if caught_up or failed:
+            lines = ["🔧 调度器补档告警",
+                     f"时间：{now:%Y-%m-%d %H:%M} BJT",
+                     f"档位宽限窗口：{CATCHUP_WINDOW_MINUTES} 分钟"]
+            if caught_up:
+                for e in caught_up:
+                    lines.append(f"   ✅ {e['slot']} {e['label']}：已补发"
+                                 + ("（dry-run）" if e["event"] == "dry_run" else ""))
+            if failed:
+                for e in failed:
+                    lines.append(f"   ❌ {e['slot']} {e['label']}：补发失败 HTTP {e.get('status')}")
+            lines.append(f"审计日志：{REMEDIATION_LOG}")
+            catchup_text = "\n".join(lines)
+            print(catchup_text)
+            if not args.dry_run and not args.no_catchup_push:
+                push_feishu(catchup_text)
+        else:
+            print("✅ 无需补档（所有档位已在窗口内正常触发，或已过宽限窗口）")
+
+        return 1 if (failed and not args.dry_run) else 0
+
+    # ── 常规评估分支 ──
+    always_report = args.always_report or os.environ.get("ALWAYS_REPORT", "").lower() == "true"
     print("=" * 56)
     print(f"🛰 调度器健康检查  {now:%Y-%m-%d %H:%M} 北京时间")
     print(f"   仓库 {REPO}，回看 {args.days} 个完整交易日")
@@ -555,7 +938,7 @@ def main() -> int:
             kv = "已配置" if hb.get("kvConfigured") else "未配置 KV 绑定"
             print(f"   心跳：Worker 在线（KV {kv}），最后成功 dispatch="
                   f"{(hb.get('last_dispatch') or {}).get('ts_ms') or '无'}")
-            problems.extend(heartbeat_problems(hb, per_day))
+            problems.extend(heartbeat_problems(hb, per_day, now))
     else:
         print("   ⚠️ 未配置 WORKER_HEALTH_URL，跳过 Worker 心跳比对"
               "（仍按 workflow_dispatch 次数判定，无法区分 Worker 停摆与 GitHub 未接单）")
