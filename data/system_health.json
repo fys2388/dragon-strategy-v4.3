@@ -11,10 +11,11 @@
     "2026-09-30": 0,
     "2026-10-01": 0,
     "2026-10-02": 0,
-    "2026-10-05": 0
+    "2026-10-05": 0,
+    "2026-10-06": 0
   },
-  "consecutive_zero_days": 6,
-  "degradation_level": 2,
+  "consecutive_zero_days": 7,
+  "degradation_level": 3,
   "last_recommendation_date": "2026-09-25",
   "degradation_history": [
     {
@@ -28,8 +29,14 @@
       "from_level": 1,
       "to_level": 2,
       "reason": "连续5天0推荐"
+    },
+    {
+      "date": "2026-10-06 10:05:01",
+      "from_level": 2,
+      "to_level": 3,
+      "reason": "连续7天0推荐"
     }
   ],
   "recovery_history": [],
-  "updated_at": "2026-10-05 14:49:06"
+  "updated_at": "2026-10-06 10:05:03"
 }
