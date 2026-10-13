@@ -123,8 +123,10 @@ def expected_max_dispatch_gap_hours(last_success_bjt: datetime,
         return 0.0
 
     # 把档位表展开成 last_success 之后 ~ now 之间本应出现的所有档位时刻。
-    # 若这些档位一个都没出现，且最后一个「本应出现」的档位晚于 last_success
-    # 至少 30 分钟，说明期间有档位漏发 → 预期空档 = 最后一个漏发档位到 now。
+    # 只统计「严格早于 now」的本应档位（s < now）：正在发生/刚触发的档位不算
+    # 漏发（Worker Cron 与检查器有时序竞争，09:15 盘前档在 09:15 检查时还没
+    # 该算漏发）。若这些档位一个都没出现，且最后一个「本应出现且严格早于
+    # now」的档位存在 → 期间有档位漏发 → 预期空档 = 最后漏发档位到 now。
     # 若期间没有任何本应出现的档位（纯夜里/纯休市），预期空档 = last_success 到 now。
     slots: List[datetime] = []
     day = last_success_bjt.date()
@@ -134,9 +136,10 @@ def expected_max_dispatch_gap_hours(last_success_bjt: datetime,
         if not is_market_closed(day):
             for h, m, _label in PUSH_SLOTS + REVIEW_SLOTS:
                 day_slots.append(datetime(day.year, day.month, day.day, h, m, tzinfo=bjt))
-        if day_slots and day_slots[0] > now:
+        # 当天第一个档位已严格晚于 now → 后续天都不用看了，结束
+        if day_slots and day_slots[0] >= now:
             break
-        slots.extend([s for s in day_slots if s > last_success_bjt and s <= now])
+        slots.extend([s for s in day_slots if s > last_success_bjt and s < now])
         if slots:
             last_slot_dt = slots[-1]
         day += timedelta(days=1)
