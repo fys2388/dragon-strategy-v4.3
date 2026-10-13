@@ -1,11 +1,11 @@
 {
   "status": "ok",
-  "trained_at": "2026-10-04 17:24:21",
+  "trained_at": "2026-10-11 17:57:49",
   "sample_count": 6400,
-  "positive_count": 1875,
-  "negative_count": 4525,
-  "accuracy": 71.64,
-  "auc": 0.5119,
+  "positive_count": 1878,
+  "negative_count": 4522,
+  "accuracy": 72.03,
+  "auc": 0.4579,
   "stock_count": 25,
   "days": 250,
   "feature_names": [
@@ -49,43 +49,43 @@
   "top_features": [
     {
       "feature": "volatility_10d",
-      "importance": 137.79
-    },
-    {
-      "feature": "amplitude_20d",
-      "importance": 119.71
-    },
-    {
-      "feature": "macd_dif",
-      "importance": 87.64
-    },
-    {
-      "feature": "macd_dea",
-      "importance": 65.12
-    },
-    {
-      "feature": "macd_hist",
-      "importance": 64.93
-    },
-    {
-      "feature": "rsi_12",
-      "importance": 62.15
-    },
-    {
-      "feature": "rsi_6",
-      "importance": 45.37
+      "importance": 126.91
     },
     {
       "feature": "amplitude_5d",
-      "importance": 33.54
+      "importance": 52.93
     },
     {
-      "feature": "volume_trend",
-      "importance": 28.28
+      "feature": "macd_dif",
+      "importance": 51.31
     },
     {
-      "feature": "ma10_slope",
-      "importance": 27.38
+      "feature": "rsi_12",
+      "importance": 41.71
+    },
+    {
+      "feature": "amplitude_20d",
+      "importance": 37.89
+    },
+    {
+      "feature": "ma5_slope",
+      "importance": 28.6
+    },
+    {
+      "feature": "rsi_24",
+      "importance": 26.09
+    },
+    {
+      "feature": "rsi_6",
+      "importance": 17.68
+    },
+    {
+      "feature": "macd_hist",
+      "importance": 11.39
+    },
+    {
+      "feature": "ma20_deviation",
+      "importance": 10.1
     }
   ],
   "params": {
