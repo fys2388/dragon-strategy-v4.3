@@ -101,6 +101,59 @@ def is_market_closed(d: date) -> bool:
         return True
     return d.isoformat() in HOLIDAYS
 
+
+def expected_max_dispatch_gap_hours(last_success_bjt: datetime,
+                                   now: datetime) -> float:
+    """从 last_success 到 now 之间，按 SCHEDULE + 休市日历算出的「档位允许的最长空档」（小时）。
+
+    Worker 只在交易日 9:15~15:30 发档位。正常空档有两种：
+      - 交易日夜里（15:30 复盘 → 次日 9:15 盘前）：约 17.7h，期间不该有任何 dispatch；
+      - 休市日/周末整段无档位：更长（国庆 5 天 = 100h+）。
+    若「实际空档 ≤ 预期空档 + 缓冲」，说明 Worker 只是按正常节奏在空档期，
+    不是停摆。超过预期才告警（说明本应有档位却没发，或 Worker 停了）。
+    """
+    bjt = timezone(timedelta(hours=8))
+    if last_success_bjt.tzinfo is None:
+        last_success_bjt = last_success_bjt.replace(tzinfo=bjt)
+    else:
+        last_success_bjt = last_success_bjt.astimezone(bjt)
+    now = now.astimezone(bjt)
+    if now <= last_success_bjt:
+        # 检查器时钟异常或心跳超前，不算空档。
+        return 0.0
+
+    # 把档位表展开成 last_success 之后 ~ now 之间本应出现的所有档位时刻。
+    # 若这些档位一个都没出现，且最后一个「本应出现」的档位晚于 last_success
+    # 至少 30 分钟，说明期间有档位漏发 → 预期空档 = 最后一个漏发档位到 now。
+    # 若期间没有任何本应出现的档位（纯夜里/纯休市），预期空档 = last_success 到 now。
+    slots: List[datetime] = []
+    day = last_success_bjt.date()
+    last_slot_dt: Optional[datetime] = None
+    while True:
+        day_slots: List[datetime] = []
+        if not is_market_closed(day):
+            for h, m, _label in PUSH_SLOTS + REVIEW_SLOTS:
+                day_slots.append(datetime(day.year, day.month, day.day, h, m, tzinfo=bjt))
+        if day_slots and day_slots[0] > now:
+            break
+        slots.extend([s for s in day_slots if s > last_success_bjt and s <= now])
+        if slots:
+            last_slot_dt = slots[-1]
+        day += timedelta(days=1)
+        if day > now.date():
+            break
+
+    # 期间存在「本应出现但没出现」的档位 → 最长正常空档只能到这些档位为止
+    if last_slot_dt is not None:
+        gap_limit = (now - last_slot_dt).total_seconds() / 3600
+    else:
+        # 整个空档期没有任何档位义务（夜里或休市）→ 全部时长都算正常
+        gap_limit = (now - last_success_bjt).total_seconds() / 3600
+    # 加 30 分钟缓冲：Worker 在 15:30 档位后几小时内才写 KV 心跳是正常延迟
+    gap_limit += 0.5
+    return max(gap_limit, 0.0)
+
+
 # 期望值与 cloudflare-worker/worker.js 的 SCHEDULE 一一对应，改节奏时同步改这里。
 EXPECTED_PUSH_PER_DAY = 10    # 9:15 盘前 1 次 + 盘中 9 档（10:00~14:30 各30分钟 + 14:45 尾盘）
 EXPECTED_REVIEW_PER_DAY = 1   # 15:30 复盘
@@ -654,10 +707,23 @@ def heartbeat_problems(hb: Dict, per_day: List[Dict],
 
     # 交易日当天：
     if dispatch_age > MAX_HEARTBEAT_AGE_H:
-        problems.append(("🚨", "heartbeat_stale",
-                         f"Worker 最近 {MAX_HEARTBEAT_AGE_H:.1f} 小时内没有成功的 dispatch 记录"
-                         f"（最后成功：{beijing_time(last_dispatch)}）→ "
-                         f"Worker 未运行/被暂停/被删除，或 Cron 触发器丢失"))
+        # 固定 6h 阈值对「夜里空档」误判：交易日 15:31 复盘 → 次日 00:13 检查
+        # 间隔 8.7h，但 15:30~次日 9:15 之间本就无任何档位（隔夜 17.7h）。
+        # 用 SCHEDULE+休市日历算出的「预期最长空档」校准：实际空档 ≤ 预期才不告警。
+        last_ts = float(last_dispatch.get("ts_ms") or 0)
+        last_success_dt = datetime.fromtimestamp(last_ts / 1000,
+                                                 timezone(timedelta(hours=8)))
+        gap_limit = expected_max_dispatch_gap_hours(last_success_dt, now)
+        if dispatch_age <= gap_limit:
+            print(f"   ℹ️ 心跳最后成功 dispatch={beijing_time(last_dispatch)}"
+                  f"（{dispatch_age:.1f}h 前），落在预期空档 {gap_limit:.1f}h 内"
+                  f"（夜里/跨档空档，无档位义务），跳过心跳陈旧判定")
+        else:
+            problems.append(("🚨", "heartbeat_stale",
+                             f"Worker 最近 {MAX_HEARTBEAT_AGE_H:.1f} 小时内没有成功的 dispatch 记录"
+                             f"（最后成功：{beijing_time(last_dispatch)}，{dispatch_age:.1f}h 前，"
+                             f"预期空档 {gap_limit:.1f}h）→ "
+                             f"Worker 未运行/被暂停/被删除，或 Cron 触发器丢失"))
     else:
         # 心跳新鲜但 GitHub 侧一次都没跑 → 问题在 GitHub，不在 Worker。
         # 只在「确实查到了可信的 GitHub 运行记录」时才判，否则会把
