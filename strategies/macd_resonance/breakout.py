@@ -26,7 +26,7 @@ from typing import Dict, List
 
 from . import data_source as ds
 from .config import HARD_FILTERS
-from .trading_calendar import now_bjt
+from .trading_calendar import now_bjt, is_holiday
 from .filters import pass_hard_filters
 
 import logging
@@ -86,9 +86,9 @@ class BreakoutScanner:
         today = now_bjt().date()
         for i in range(1, 15):  # 最多查15天
             day = (today - timedelta(days=i)).strftime('%Y-%m-%d')
-            # 周末不算（周六周日不是交易日）
-            weekday = (today - timedelta(days=i)).weekday()
-            if weekday >= 5:  # 周六=5, 周日=6
+            # 非交易日不算（周末/节假日）
+            day_dt = today - timedelta(days=i)
+            if is_holiday(day_dt):
                 continue
             count = daily_counts.get(day, 0)
             if count == 0:
@@ -304,10 +304,15 @@ class BreakoutScanner:
         # 0.1 市场环境：写进 result，tracking 才能按 regime 归因。
         # 原实现从不写 regime → 突破策略的学习记录全是 "unknown"，
         # regime 条件化分析对这个策略完全失效。
+        # 2026-10-15 修复：原代码引用 get_market_data（不存在的函数），
+        # 导致每次运行都在同一行抛 ImportError，趋势突破策略 100% 崩溃、
+        # 从未真正扫描过。改用与 scanner/oversold_rebound 一致的
+        # get_data_with_fallback()（返回 (MarketData|None, source)）。
         from .market_regime import REGIME_LABELS, classify_regime
-        from .data_validator import get_market_data
+        from .data_validator import get_data_with_fallback
         try:
-            regime = classify_regime(get_market_data())
+            md, _src = get_data_with_fallback()
+            regime = classify_regime(md)
         except Exception as e:
             LOG.warning(f"[趋势突破] 市场环境识别失败: {e}，按震荡市处理")
             regime = "sideways"

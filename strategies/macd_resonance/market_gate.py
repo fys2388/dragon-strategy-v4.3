@@ -57,17 +57,24 @@ def get_market_score(market_data: Optional[object] = None) -> Tuple[float, str, 
     details.append(sh_detail)
 
     # 2. 两市成交额 ≥8000 亿（+1）
+    # 2026-10-15 修复：盘前/非交易时段成交额为0时，不评分、标注"数据暂缺"，
+    # 避免假数据导致错误评分（原逻辑按0分算，但0不是真实数据）。
     if market_data is not None and market_data.volume_yi > 0:
         total_amount = float(market_data.volume_yi)
     else:
         total_amount = ds.get_market_total_amount_yi()
-    if total_amount >= 8000:
+    if total_amount <= 0:
+        details.append(f"⚠️ 两市成交额数据暂缺，不计分")
+    elif total_amount >= 8000:
         score += 1
         details.append(f"✓ 两市成交额{total_amount:.0f}亿≥8000亿(+1)")
     else:
         details.append(f"✗ 两市成交额{total_amount:.0f}亿<8000亿")
 
     # 3/4/5. 涨停/跌停家数
+    # 2026-10-15 修复：涨跌停均为0时（盘前/数据源不可用），不评分、不加分，
+    # 标注"数据暂缺"。原逻辑"跌停<10"在盘前0家时错误加+1分，
+    # 导致盘前报告出现假1/7分（实际应为0分或N/A）。
     if market_data is not None:
         up = int(market_data.limit_up_count)
         down = int(market_data.limit_down_count)
@@ -75,21 +82,24 @@ def get_market_score(market_data: Optional[object] = None) -> Tuple[float, str, 
     else:
         up, down = get_limit_up_down_count()
         idx_chg = 0.0
-    if up >= 30:
-        score += 1
-        details.append(f"✓ 涨停{up}家≥30(+1)")
+    if up == 0 and down == 0:
+        details.append(f"⚠️ 涨跌停数据暂缺，不计分")
     else:
-        details.append(f"✗ 涨停{up}家<30")
-    if down < 10:
-        score += 1
-        details.append(f"✓ 跌停{down}家<10(+1)")
-    else:
-        details.append(f"✗ 跌停{down}家≥10")
-    if up >= 50:
-        score += 2
-        details.append(f"✓ 涨停{up}家≥50(+2)")
-    else:
-        details.append(f"✗ 涨停{up}家<50")
+        if up >= 30:
+            score += 1
+            details.append(f"✓ 涨停{up}家≥30(+1)")
+        else:
+            details.append(f"✗ 涨停{up}家<30")
+        if down < 10:
+            score += 1
+            details.append(f"✓ 跌停{down}家<10(+1)")
+        else:
+            details.append(f"✗ 跌停{down}家≥10")
+        if up >= 50:
+            score += 2
+            details.append(f"✓ 涨停{up}家≥50(+2)")
+        else:
+            details.append(f"✗ 涨停{up}家<50")
 
     # V2.0 减分项
     if down >= 20:

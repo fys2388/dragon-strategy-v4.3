@@ -114,8 +114,17 @@ class TestMarketScoreUsesDynamicCount(unittest.TestCase):
     @mock.patch("strategies.macd_resonance.market_gate._check_sh_ma20",
                 return_value=(2.0, "ok"))
     def test_zero_limit_counts_still_works(self, m_sh, m_amount, m_ld):
+        """2026-10-15 修复：涨跌停均为0时标注'数据暂缺'，不再按0家算分。
+
+        原行为（已废弃）：涨跌停0家 → '✗ 涨停0家<30' + '✓ 跌停0家<10(+1)' → 假1/7分。
+        新行为：涨跌停0家 → '⚠️ 涨跌停数据暂缺，不计分' → 不加分不扣分。
+        仅保留沪指MA20(+2) 和 成交额(+1) 的有效得分。
+        """
         score, desc, can_open = get_market_score()
-        self.assertIn("涨停0家", desc)
+        # 涨跌停不计分 → 总分 = MA20(2) + 成交额(1) = 3
+        self.assertAlmostEqual(score, 3.0)
+        self.assertIn("数据暂缺", desc)
+        self.assertNotIn("涨停0家", desc)
 
 
 class TestBuildMessage(unittest.TestCase):

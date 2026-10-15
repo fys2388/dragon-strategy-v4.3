@@ -24,7 +24,7 @@ from .adaptive_config import get_macd_params, get_risk_params, get_current_regim
 from .filters import pass_hard_filters
 from .market_gate import get_market_score
 from .portfolio_manager import PortfolioManager
-from .trading_calendar import BJT, is_trading_time, now_bjt
+from .trading_calendar import BJT, is_trading_time, is_holiday, now_bjt
 from .signal_engine import SignalEngine, SignalType
 from .data_validator import (ValidationResult, get_data_with_fallback, send_feishu_alert,
                              update_source_status, validate_stock_pool, get_cached_pool, set_cached_pool)
@@ -408,6 +408,22 @@ class Scanner:
                  f"参数={adaptive_params['name']} "
                  f"振幅上限={adaptive_params.get('amplitude_20d_max', 40)}% "
                  f"最低得分={adaptive_params.get('min_score', 2.0)}")
+
+        # 1.7 健康度降级覆盖大盘门控短路
+        # 原逻辑：大盘<3分 → 直接不扫描 → 降级只能放宽"扫描后过滤"，
+        # 对"不扫描"完全无效 → 连续14天0推荐但降级到Level 3仍无推荐。
+        # 修复：Level 2+ 降低门控短路阈值，允许"宽松档"扫描。
+        #   Level 2：大盘≥2分 允许扫描
+        #   Level 3：大盘≥1分 允许扫描（0分=系统性风险熔断，仍不放行）
+        degradation_level = result.get("degradation_level", 0)
+        if not can_open and degradation_level >= 2:
+            relaxed_gate = 1.0 if degradation_level >= 3 else 2.0
+            if score >= relaxed_gate:
+                can_open = True
+                result["can_open"] = can_open
+                LOG.warning(f"[健康度降级] Level {degradation_level}：大盘{score:.1f}分≥{relaxed_gate:.0f}，"
+                            f"允许宽松档扫描（原门控<3分短路已覆盖）")
+
         if not can_open:
             result["summary"] = f"大盘评分 {score:.1f} 分 < 4，仅允许平仓/空仓，禁止新开多。"
             LOG.info(result["summary"])
@@ -588,7 +604,7 @@ def main():
     if os.environ.get("TEST_MODE", "").lower() != "true":
         now = now_bjt()
         hm = now.hour * 100 + now.minute
-        in_window = now.weekday() < 5 and (915 <= hm < 930 or is_trading_time(now))
+        in_window = (not is_holiday(now)) and (915 <= hm < 930 or is_trading_time(now))
         if not in_window:
             print(f"📌 非交易时段（北京时间 {now.strftime('%Y-%m-%d %H:%M:%S')}），跳过扫描。"
                   f"如需强制运行请设置 TEST_MODE=true")
