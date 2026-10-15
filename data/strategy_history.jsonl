@@ -153,3 +153,4 @@
 {"ts": "2026-10-15 10:00:50", "strategy": "resonance", "regime": "sideways", "market_score": 0.0, "can_open": false, "degradation_level": 3, "recommend_count": 0, "summary": "大盘评分 0.0 分 < 4，仅允许平仓/空仓，禁止新开多。", "entries": [], "exit_signals": []}
 {"ts": "2026-10-15 10:30:57", "strategy": "resonance", "regime": "sideways", "market_score": 0.0, "can_open": false, "degradation_level": 3, "recommend_count": 0, "summary": "大盘评分 0.0 分 < 4，仅允许平仓/空仓，禁止新开多。", "entries": [], "exit_signals": []}
 {"ts": "2026-10-15 11:00:56", "strategy": "resonance", "regime": "sideways", "market_score": 2.0, "can_open": false, "degradation_level": 3, "recommend_count": 0, "summary": "大盘评分 2.0 分 < 4，仅允许平仓/空仓，禁止新开多。", "entries": [], "exit_signals": []}
+{"ts": "2026-10-15 11:30:56", "strategy": "resonance", "regime": "sideways", "market_score": 0.0, "can_open": false, "degradation_level": 3, "recommend_count": 0, "summary": "大盘评分 0.0 分 < 4，仅允许平仓/空仓，禁止新开多。", "entries": [], "exit_signals": []}
