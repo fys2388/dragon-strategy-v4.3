@@ -34,7 +34,7 @@ for _stream in (sys.stdout, sys.stderr):
 from strategies.macd_resonance import data_source as ds  # noqa: E402
 from strategies.macd_resonance.market_gate import get_market_score  # noqa: E402
 from strategies.macd_resonance.portfolio_manager import PortfolioManager  # noqa: E402
-from strategies.macd_resonance.trading_calendar import now_bjt  # noqa: E402
+from strategies.macd_resonance.trading_calendar import now_bjt, is_holiday  # noqa: E402
 from utils.config_loader import load_feishu_config  # noqa: E402
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -251,6 +251,11 @@ def build_review_report() -> str:
 
 def main():
     no_send = "--no-send" in sys.argv
+    # 节假日不推送复盘（Worker 在节假日仍会触发，此处是最终防线）
+    now = now_bjt()
+    if is_holiday(now):
+        print(f"📌 {now.strftime('%Y-%m-%d')} 为休市日（周末或法定节假日），跳过收盘复盘")
+        return
     report = build_review_report()
     print(report)
     print()

@@ -35,7 +35,7 @@ from strategies.macd_resonance.market_cluster import init_market_cluster  # noqa
 from strategies.macd_resonance import data_source as ds  # noqa: E402
 from strategies.macd_resonance.multi_dimension_filter import init_multi_filter  # noqa: E402
 from strategies.macd_resonance.sector_strength import get_strong_sectors, build_sector_report  # noqa: E402
-from strategies.macd_resonance.trading_calendar import is_trading_time, now_bjt  # noqa: E402
+from strategies.macd_resonance.trading_calendar import is_trading_time, is_holiday, now_bjt  # noqa: E402
 
 SCAN_TIMEOUT_S = 480  # 扫描硬超时（秒）：数据源异常挂起时兜底
 SCAN_MAX_STOCKS = 1200  # 定时扫描标的池规模（按成交额降序，活跃标的；控制 5 分钟节奏内的耗时）
@@ -75,8 +75,8 @@ def _exit_on_push_failure(ok: bool, what: str) -> None:
 
 
 def should_run(now: datetime) -> bool:
-    """运行窗口：盘前 9:15-9:30 + 交易时段 9:30-11:30/13:00-15:00。"""
-    if now.weekday() >= 5:
+    """运行窗口：盘前 9:15-9:30 + 交易时段 9:30-11:30/13:00-15:00。非交易日返回 False。"""
+    if is_holiday(now):
         return False
     hm = now.hour * 100 + now.minute
     if 915 <= hm < 930:  # 盘前窗口（含 9:15 盘前推送）
@@ -254,7 +254,12 @@ def resolve_report_mode(now: datetime) -> str:
     REPORT_MODE 由工作流按触发档位显式传入（9:15 档 → premarket，盘中档 → scan），
     不依赖当前时间，GitHub 调度延迟也不会把 9:15 档误判为盘中扫描。
     例外：premarket 有延迟守卫——若在 9:45 之后才运行则跳过（见函数内注释）。
+    节假日（含周末）无论 REPORT_MODE 为何值一律跳过。
     """
+    # 节假日：无论什么模式都跳过（Worker 在节假日也会触发，此处是最终防线）
+    if is_holiday(now):
+        return "skip"
+
     mode = os.environ.get("REPORT_MODE", "").strip().lower()
     if mode == "premarket":
         # 守卫（按时间判断，不区分触发来源）：9:15 档若被延迟到 9:45 之后才运行，
@@ -271,8 +276,7 @@ def resolve_report_mode(now: datetime) -> str:
     if mode == "scan":
         return "scan"
     # 手动触发（REPORT_MODE 为空）：按当前时间自动选择
-    if now.weekday() >= 5:
-        return "skip"
+    # is_holiday 已在函数开头拦截节假日，此处仅按时间自动选择
     hm = now.hour * 100 + now.minute
     if 915 <= hm < 930:
         return "premarket"

@@ -659,5 +659,44 @@ score = 1.0  # 基础：日线多头（C 闸门已过）
   但需要重新跑 `weekly_replay_validation.yml` 看新参数在历史样本上的表现。
 - `data/tracking.jsonl` 目前只有 10 条 breakout 记录（9-20/9-21），
   样本量不足以对比新旧参数——需要至少 5+ 交易日的推荐数据才能做 regime 归因。
-- `data/optimized_params.json` 如果存在旧优化结果，`adaptive_config._load_optimized_params`
+### 9.8 调度器 L1 补档（2026-09-22）
+
+**背景**：`scheduler_health_check.yml` 只检测 + 告警，从不自动修复。Cloudflare Worker
+漏发一个档位（15 分钟内网络抖动、GITHUB_TOKEN 短暂失效、GitHub Actions 排队），
+当天就永久缺一档，只能等 19:30 的健康检查告警后人工介入。
+
+**为什么补档需要独立工作流**：`scheduler_health_check.yml` 的 cron 定在 15:00 BJT
+（UTC 07:00），实测执行约 19:30 BJT，此时当天所有档位都过了 30 分钟补发宽限窗口，
+`--catchup` 分支永远走不到「补发」路径。补档必须在交易时段内高频跑。
+
+**L1 落地**（3 处改动）：
+
+| 改动 | 位置 | 说明 |
+|---|---|---|
+| `--catchup` 分支 | `scripts/scheduler_health_check.py` | 新增 `check_today()` + `attempt_catchup()` + `_dispatch_workflow()` + `_record_catchup()`；30 分钟宽限窗口内幂等补发，每次操作 append 到 `data/scheduler_remediation.jsonl` |
+| 新工作流 | `.github/workflows/scheduler_catchup.yml` | `cron: '*/15 * * * 1-5'`（工作日 UTC 01:00-07:45 = BJT 09:00-15:45），权限 `actions:write`（比健康检查多一个），跑 `--catchup`，回传审计日志 |
+| 单元测试 | `tests/test_scheduler_health_check.py` | 29 项覆盖：宽限窗口边界、幂等判定、`_api_post` 成功/失败/网络异常、`attempt_catchup` 四种事件、`main() --catchup --dry-run` 全流程 |
+
+**幂等与降级**：
+
+- **每档只补 1 次**：`_slot_already_dispatched()` 通过 GitHub `created_at` ±15 分钟
+  容忍窗口匹配已存在的 `workflow_dispatch` 运行，避免重复触发。
+- **宽限窗口外不补**：`CATCHUP_WINDOW_MINUTES=30`。历史漏发不会在今天被补成
+  "迟到推送"污染；`scheduler_health_check.yml` 会作为主哨兵捕获并告警。
+- **失败不重试**：401/403/500 只落审计日志 + 独立飞书消息，让 Actions 红点作为
+  兜底信号。
+- **降级路径**：`data/scheduler_remediation.jsonl` 由 workflow 的「回传审计日志」
+  步骤单独 commit，即使后续步骤失败也不会丢审计证据。
+
+**取舍说明（明确不做 L2/L3）**：
+
+- **不做** API 失败自动重试分发（L1-2）：会形成自触发循环，风险 > 收益。
+- **不做** 手动一键修复工作流（L2）：30 分钟宽限窗口内自动补档已足够，人工按钮是过度设计。
+- **不做** 跨云自愈（L3）：扩大攻击面，Cloudflare Worker 挂掉时不该有另一个凭据去恢复它。
+- **保留** 主哨兵告警：补档只是「尽力而为」的兜底，`scheduler_health_check.yml`
+  的完整评估（跨日历史、Worker 心跳比对）依然是主防线。
+
+**验证**：全量 **152 passed / 0 failed，约 2.2s**（原基线 123 → +29 新增）。
+
+### 9.8.1 后续未决
   会覆盖硬编码默认值；上线前应确认该文件不存在或已被清理。

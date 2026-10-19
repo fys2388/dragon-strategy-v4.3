@@ -1,0 +1,104 @@
+# -*- coding: utf-8 -*-
+# 调度器补档（Catch-up）：交易时段内对漏发档位自动 POST /dispatches 补一次。
+#
+# 为什么单独一个工作流（而不是复用 scheduler_health_check.yml）：
+#   scheduler_health_check.yml 的 cron 定在 15:00 BJT（UTC 07:00），实测执行 ~19:30 BJT，
+#   此时当天所有档位（9:15~15:30）都已过了 30 分钟补发宽限窗口，
+#   --catchup 分支永远走不到「补发」路径。补档必须在交易时段内高频跑。
+#
+# cron 时间（UTC 01:00-07:45 → 北京时间 09:00-15:45，覆盖全部档位）：
+#   */15 * * * 1-5  每 15 分钟一次，工作日
+#   GitHub Actions cron 实测可能延迟（仓库内观察 4h23m+），因此：
+#     - 30 分钟宽限窗口：Worker 未按时触发 → 下一 tick（15 分钟内）捕获并补发
+#     - 若 GitHub Actions cron 延迟超过 30 分钟，补发窗口已过 → 本次 tick 会 skip，
+#       但下一天的 scheduler_health_check.yml（19:30 BJT 运行）会捕获并告警。
+#     - 补档是「尽力而为」的兜底，不是唯一告警通道；scheduler_health_check 仍然是主哨兵。
+#
+# 幂等保证：
+#   - 每档只补 1 次：_slot_already_dispatched() 通过 created_at ±15 分钟容忍窗口
+#     匹配已存在的 workflow_dispatch 运行，避免重复触发。
+#   - 每次操作（补发 / 跳过 / 失败）都 append 到 data/scheduler_remediation.jsonl，
+#     人工可事后审计（策略工作流的「回传学习数据」步骤会把它 push 回仓库）。
+#
+# 权限说明：
+#   需要 contents: read（checkout 代码）+ actions: read（读 workflow_runs）
+#   + actions: write（POST /dispatches 触发补发）。
+#   比 scheduler_health_check.yml 多了一个 actions: write，是 L1 补档能力的必要代价。
+#
+# 安静约定：
+#   只有真的补发了或补发失败才推飞书；一切正常时保持静默（避免每 15 分钟一条噪音）。
+#   正常时无输出、无飞书推送、workflow 变绿。
+name: 调度器补档
+
+on:
+  schedule:
+    - cron: '*/15 * * * 1-5'  # 工作日每 15 分钟，UTC 01:00-07:45 = 北京时间 09:00-15:45
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: '模拟模式：只打印不发网络请求（用于验证飞书/告警链路）'
+        type: boolean
+        default: false
+      no_feishu_push:
+        description: '补档后不额外推送飞书（用于验证补档本身但避开飞书噪音）'
+        type: boolean
+        default: false
+
+# 显式申请最小权限：actions:write 是 POST /dispatches 所必需
+permissions:
+  contents: read
+  actions: read
+  actions: write
+
+jobs:
+  scheduler-catchup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # 补档 workflow 只应跑在 GitHub-hosted ubuntu-latest（Linux）上。
+    # 仓库里其它 workflow 也没设 if，为一致性这里也不加。
+    steps:
+      - name: 拉取仓库代码
+        uses: actions/checkout@v4
+
+      - name: 设置Python环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装依赖
+        run: pip install requests
+
+      - name: 运行调度器补档
+        env:
+          # Actions 内置 token（本次 workflow 声明了 actions:write，可 POST /dispatches）。
+          # 与 Cloudflare Worker 里 Secrets.GITHUB_TOKEN 是两个不同的凭据。
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+          NO_FEISHU_PUSH: ${{ inputs.no_feishu_push || 'false' }}
+        run: |
+          ARGS=""
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+          if [ "${{ inputs.no_feishu_push }}" = "true" ]; then
+            ARGS="$ARGS --no-catchup-push"
+          fi
+          python scripts/scheduler_health_check.py --catchup $ARGS
+
+      - name: 回传补档审计日志
+        if: always()
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          if [ -f data/scheduler_remediation.jsonl ]; then
+            git add data/scheduler_remediation.jsonl
+          fi
+          if git diff --cached --quiet; then
+            echo "补档审计日志无变化"
+          else
+            git commit -m "调度器补档审计日志（自动）"
+            git push
+            echo "补档审计日志已回传"
+          fi

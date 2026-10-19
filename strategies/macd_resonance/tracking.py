@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
 from . import data_source as ds
+from .trading_calendar import is_trading_day as _cal_is_trading_day
 from .trading_calendar import now_bjt
 from .loop_config import (COMPLETION_DAY, COMPLETION_DAY_FIELD, FULL_TRACK_DAYS,
                           completion_summary)
@@ -155,8 +156,8 @@ def get_daily_recommend_counts(strategy: str = None) -> Dict[str, int]:
 
 
 def _is_trading_day(date: datetime) -> bool:
-    """简单判断是否为交易日（周一到周五，节假日后续优化）。"""
-    return date.weekday() < 5
+    """判断是否为交易日（周一到周五且非法定节假日）。"""
+    return _cal_is_trading_day(date)
 
 
 def _get_trading_days(start_date: str, count: int) -> List[str]:
