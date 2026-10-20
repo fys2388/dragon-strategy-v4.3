@@ -461,3 +461,124 @@ class TestMainCatchup:
         finally:
             sys.argv = argv_orig
         assert rc == 0
+
+
+# ------------------------------------------------------------
+# 7. evaluate —— failed_run 历史失败降级（2026-10-20）
+# ------------------------------------------------------------
+def _run_record(utc_dt: datetime, conclusion: str = "success",
+                run_id: int = 100) -> dict:
+    """构造一条 workflow_dispatch 运行记录（对齐 fetch_dispatch_runs 的结构）。"""
+    return {
+        "id": run_id,
+        "event": "workflow_dispatch",
+        "created_at": utc_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "conclusion": conclusion,
+    }
+
+
+class TestEvaluateFailedRunDemotion:
+    """failed_run 只对最新完整交易日告警；更早日期的失败进 hist_notes（不触发红点）。
+
+    背景：修复一个 bug 后，3 天回看窗口内仍残留旧日期的失败 run，
+    若不降级，健康检查会连续 3 天误报。本组测试锁住这一行为。
+    """
+
+    @pytest.fixture
+    def mock_fetch(self, monkeypatch):
+        """把 fetch_dispatch_runs 替换成按 (workflow, day) 查表的可控 fake。"""
+        table: dict = {}
+        fetched = {"count": 0}
+
+        def fake_fetch(token, wf, day):
+            fetched["count"] += 1
+            runs = table.get((wf, day), [])
+            return {"missing": False, "runs": runs}
+
+        monkeypatch.setattr(shc, "fetch_dispatch_runs", fake_fetch)
+
+        def _install(entries):
+            """entries: [(wf, day, [run, ...]), ...]；未列出的组合视为 0 次运行。"""
+            for wf, day, runs in entries:
+                table[(wf, day)] = runs
+
+        return _install, fetched
+
+    def test_latest_day_failure_still_alerts(self, mock_fetch, bjt):
+        """最新日有失败 run → 进 problems（告警级）。"""
+        install, _ = mock_fetch
+        install([
+            (shc.PUSH_WORKFLOW, date(2026, 10, 16),
+             [_run_record(datetime(2026, 10, 16, 2, 0, 15, tzinfo=timezone.utc), "failure", 1)]),
+            (shc.REVIEW_WORKFLOW, date(2026, 10, 16),
+             [_run_record(datetime(2026, 10, 16, 7, 30, tzinfo=timezone.utc), "success", 2)]),
+            (shc.PUSH_WORKFLOW, date(2026, 10, 19),
+             [_run_record(datetime(2026, 10, 19, 2, 0, 15, tzinfo=timezone.utc), "failure", 3)]),
+            (shc.REVIEW_WORKFLOW, date(2026, 10, 19),
+             [_run_record(datetime(2026, 10, 19, 7, 30, tzinfo=timezone.utc), "success", 4)]),
+        ])
+        per_day, problems, api_errors, hist_notes = shc.evaluate(
+            "token", [date(2026, 10, 16), date(2026, 10, 19)])
+        kinds = [p[1] for p in problems]
+        assert "failed_run" in kinds, "最新日失败必须触发 failed_run 告警"
+        fr = [p for p in problems if p[1] == "failed_run"]
+        assert len(fr) == 1 and "10-19" in fr[0][2], "只有最新日进 problems"
+        assert any("10-16" in n for n in hist_notes), "旧日失败进 hist_notes"
+
+    def test_old_day_failure_demoted_to_hist_note(self, mock_fetch, bjt):
+        """更早日期的失败 → 仅进 hist_notes，不进 problems（不触发红点）。"""
+        install, _ = mock_fetch
+        install([
+            # 10-16（旧）：10 次失败（模拟 10-19 之前的 ImportError 事故日）
+            (shc.PUSH_WORKFLOW, date(2026, 10, 16),
+             [_run_record(datetime(2026, 10, 16, 2, i, tzinfo=timezone.utc), "failure", 100 + i)
+              for i in range(10)]),
+            (shc.REVIEW_WORKFLOW, date(2026, 10, 16),
+             [_run_record(datetime(2026, 10, 16, 7, 30, tzinfo=timezone.utc), "success", 200)]),
+            # 10-19（最新）：全部成功
+            (shc.PUSH_WORKFLOW, date(2026, 10, 19),
+             [_run_record(datetime(2026, 10, 19, 2, i, tzinfo=timezone.utc), "success", 300 + i)
+              for i in range(10)]),
+            (shc.REVIEW_WORKFLOW, date(2026, 10, 19),
+             [_run_record(datetime(2026, 10, 19, 7, 30, tzinfo=timezone.utc), "success", 400)]),
+        ])
+        per_day, problems, api_errors, hist_notes = shc.evaluate(
+            "token", [date(2026, 10, 16), date(2026, 10, 19)])
+        kinds = [p[1] for p in problems]
+        assert "failed_run" not in kinds, "旧日期失败不应触发告警（2026-10-20 修复）"
+        assert len(hist_notes) == 1
+        assert "10-16" in hist_notes[0] and "历史" in hist_notes[0]
+        # 最新日无问题 → 健康（不推送）
+        healthy, _ = shc.build_report(shc.now_bjt(), per_day, problems, api_errors, hist_notes)
+        assert healthy is True
+
+    def test_both_days_failing_only_latest_alerts(self, mock_fetch, bjt):
+        """两日都有失败：最新日进 problems，旧日进 hist_notes（各 1 条）。"""
+        install, _ = mock_fetch
+        install([
+            (shc.PUSH_WORKFLOW, date(2026, 10, 16),
+             [_run_record(datetime(2026, 10, 16, 2, 0, tzinfo=timezone.utc), "failure", 1)]),
+            (shc.PUSH_WORKFLOW, date(2026, 10, 19),
+             [_run_record(datetime(2026, 10, 19, 2, 0, tzinfo=timezone.utc), "failure", 2)]),
+        ])
+        per_day, problems, api_errors, hist_notes = shc.evaluate(
+            "token", [date(2026, 10, 16), date(2026, 10, 19)])
+        fr = [p for p in problems if p[1] == "failed_run"]
+        assert len(fr) == 1, "只有最新日的 failed_run 进 problems"
+        assert "10-19" in fr[0][2]
+        assert any("10-16" in n for n in hist_notes), "旧日失败进 hist_notes"
+
+    def test_single_day_failure_alerts(self, mock_fetch, bjt):
+        """只有 1 个检查日（即最新日）且失败 → 正常告警。"""
+        install, _ = mock_fetch
+        install([
+            (shc.PUSH_WORKFLOW, date(2026, 10, 19),
+             [_run_record(datetime(2026, 10, 19, 2, 0, tzinfo=timezone.utc), "failure", 1)]),
+            (shc.REVIEW_WORKFLOW, date(2026, 10, 19),
+             [_run_record(datetime(2026, 10, 19, 7, 30, tzinfo=timezone.utc), "success", 2)]),
+        ])
+        per_day, problems, api_errors, hist_notes = shc.evaluate(
+            "token", [date(2026, 10, 19)])
+        kinds = [p[1] for p in problems]
+        assert "failed_run" in kinds
+        assert hist_notes == []

@@ -552,19 +552,27 @@ def fetch_dispatch_runs(token: str, workflow_file: str, day: date) -> Dict:
 # ------------------------------------------------------------
 # 判定
 # ------------------------------------------------------------
-def evaluate(token: str, days: List[date]) -> Tuple[List[Dict], List[Tuple[str, str]], List[str]]:
+def evaluate(token: str, days: List[date]) -> Tuple[List[Dict], List[Tuple[str, str]], List[str], List[str]]:
     """统计每个交易日的运行次数。
 
-    返回 (per_day, problems, api_errors)
+    返回 (per_day, problems, api_errors, hist_notes)
         problems 元素为 (级别标记, 分类, 说明)：
             级别 "🚨"（停推级）/ "⚠️"（提示级）
             分类 silent / missing_workflow / partial / failed_run / api_error
+        hist_notes：历史失败说明（仅最新完整交易日的 failed_run 进 problems，
+            更早日期的失败进 hist_notes，报告中单独展示但不触发告警/红点）
     """
     per_day: List[Dict] = []
     problems: List[Tuple[str, str]] = []
     api_errors: List[str] = []
+    hist_notes: List[str] = []
+    # 2026-10-20 修复：failed_run 只对「最新完整交易日」触发告警级。
+    # 更早日期的失败属于历史（可能是已被修复的旧 bug），若仍按告警级上报，
+    # 修复后 3 天窗口内会连续误报。旧日期失败记入 hist_notes 仅在报告展示。
+    latest_day = days[-1]
 
     for day in days:
+        is_latest = (day == latest_day)
         label = day_label(day)
         row: Dict = {"label": label}
         for key, wf, expect, what in (
@@ -601,9 +609,14 @@ def evaluate(token: str, days: List[date]) -> Tuple[List[Dict], List[Tuple[str, 
                                  f"Worker 部分档位漏触发（检查 SCHEDULE 与交易时段判断）"))
             if row[f"{key}_failed"]:
                 ids = ",".join(str(i) for i in row[f"{key}_failed"][:3])
-                problems.append(("⚠️", "failed_run",
-                                 f"{label} {what}有 {len(row[f'{key}_failed'])} 次运行未成功"
-                                 f"（run id: {ids}）→ 检查 v43_push.py 推送链路"))
+                if is_latest:
+                    problems.append(("⚠️", "failed_run",
+                                     f"{label} {what}有 {len(row[f'{key}_failed'])} 次运行未成功"
+                                     f"（run id: {ids}）→ 检查 v43_push.py 推送链路"))
+                else:
+                    hist_notes.append(
+                        f"{label}（历史）{what}曾有 {len(row[f'{key}_failed'])} 次失败"
+                        f"（run id: {ids}）—— 仅展示，不触发告警")
         per_day.append(row)
 
     if api_errors:
@@ -611,7 +624,7 @@ def evaluate(token: str, days: List[date]) -> Tuple[List[Dict], List[Tuple[str, 
                          f"本次检查有 {len(api_errors)} 项 GitHub API 调用失败，"
                          f"受影响日期的数字不可信（是「查不到」，不是「停推」）"))
 
-    return per_day, problems, api_errors
+    return per_day, problems, api_errors, hist_notes
 
 
 # ------------------------------------------------------------
@@ -745,7 +758,8 @@ def heartbeat_problems(hb: Dict, per_day: List[Dict],
 # 文案
 # ------------------------------------------------------------
 def build_report(now: datetime, per_day: List[Dict],
-                 problems: List[Tuple[str, str, str]], api_errors: List[str]) -> Tuple[bool, str]:
+                 problems: List[Tuple[str, str, str]], api_errors: List[str],
+                 hist_notes: Optional[List[str]] = None) -> Tuple[bool, str]:
     """返回 (healthy, 飞书文本)。healthy=False 时才应推送。
 
     标题分三档：正常 ✅ / 停推级 🚨 / 检查自身异常 ⚠️。
@@ -789,6 +803,11 @@ def build_report(now: datetime, per_day: List[Dict],
         lines.append("")
         lines.append("异常明细：")
         lines += [f"   {level} {text}" for level, _kind, text in problems]
+
+    if hist_notes:
+        lines.append("")
+        lines.append("历史失败（仅展示，已过期不触发告警）：")
+        lines += [f"   - {n}" for n in hist_notes]
 
     if api_errors:
         lines.append("")
@@ -992,7 +1011,7 @@ def main() -> int:
     days = completed_weekdays(args.days, now.date())
     print("   检查日：" + "、".join(day_label(d) for d in days))
 
-    per_day, problems, api_errors = evaluate(token, days)
+    per_day, problems, api_errors, hist_notes = evaluate(token, days)
 
     # Worker 心跳比对（可选升级项）：未配置 WORKER_HEALTH_URL 时跳过，
     # 不影响上面已经能用的「数运行次数」判定。
@@ -1012,7 +1031,7 @@ def main() -> int:
         print("   ⚠️ 未配置 WORKER_HEALTH_URL，跳过 Worker 心跳比对"
               "（仍按 workflow_dispatch 次数判定，无法区分 Worker 停摆与 GitHub 未接单）")
 
-    healthy, text = build_report(now, per_day, problems, api_errors)
+    healthy, text = build_report(now, per_day, problems, api_errors, hist_notes)
     print(text)
 
     should_send = (not healthy) or always_report
