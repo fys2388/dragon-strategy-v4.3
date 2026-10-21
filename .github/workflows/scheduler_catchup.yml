@@ -45,9 +45,12 @@ on:
         default: false
 
 # 显式申请最小权限：actions:write 是 POST /dispatches 所必需
+# 注意：YAML 同一映射层不允许重复键。GitHub 的 workflow 校验器是严格模式，
+# 写两行 `actions: read` + `actions: write` 会报 "'actions' is already defined" 直接拒整个文件
+# （本地 PyYAML 解析静默取后者所以测不出来）。补档只需 actions:write，
+# 它已包含对 /dispatches 端点的 POST 权限；contents:read 供 checkout。
 permissions:
   contents: read
-  actions: read
   actions: write
 
 jobs:
