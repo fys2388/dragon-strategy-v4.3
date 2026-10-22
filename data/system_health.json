@@ -22,9 +22,10 @@
     "2026-10-15": 0,
     "2026-10-19": 0,
     "2026-10-20": 0,
-    "2026-10-21": 0
+    "2026-10-21": 0,
+    "2026-10-22": 0
   },
-  "consecutive_zero_days": 17,
+  "consecutive_zero_days": 18,
   "degradation_level": 3,
   "last_recommendation_date": "2026-09-25",
   "degradation_history": [
@@ -48,5 +49,5 @@
     }
   ],
   "recovery_history": [],
-  "updated_at": "2026-10-21 14:52:34"
+  "updated_at": "2026-10-22 10:10:44"
 }
