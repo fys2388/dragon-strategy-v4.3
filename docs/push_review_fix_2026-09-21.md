@@ -1,0 +1,454 @@
+# 2026-09-21 推送审阅修复：LLM 智能分析与 RISK 配置对齐
+
+## 背景
+
+用户审阅 2026-09-21 11:40 的飞书推送，发现 4 类不一致：
+
+1. **止损/目标价与 RISK 配置严重不一致**：万科A 4.19元 报"止损3.8元"=-9.3%（config `stop_loss_pct=0.05`），单票 3000×9.3%=亏 300 元，是设计上限 150 元的 2 倍；天沃 -8.1%、莲花 -9.8% 同样失控
+2. **万科A 行业标"综合"而非"房地产"**：数据源返回"万 科Ａ"（半角空格 + 全角Ａ），`"万科" in name` 匹配不到，LLM 分析被误导成多元化企业叙述
+3. **资金流出标的未做风险对冲说明**：天沃科技资金流出 🔴 却拿到 85 分推荐，推送文案里无解释
+4. **规则打分档位偏乐观**：75 分标"🟢 强"让用户误读为 90% 上涨概率
+
+## 修复内容
+
+| 文件 | 改动 |
+|---|---|
+| `strategies/macd_resonance/llm_analyzer.py` | (1) 引入 `from .config import LLM, RISK`；(2) `_build_analysis_prompt` 把 `RISK.stop_loss_pct/take_profit_1_pct/take_profit_2_pct` 硬编码进 prompt，明写"不要自造数字"；(3) 新增 `_clamp_risk_fields` staticmethod 后端保险：无条件把止损价夹到 `round(price*(1-stop_loss_pct), 2)`，目标价抬到不低于首档止盈；(4) `_analyze_with_llm` 解析 JSON 后立即 clamp；(5) INDUSTRY_KEYWORDS["房地产"] 新增万科/保利/招商蛇口/金地/新城/龙湖/碧桂园/旭辉/金科/融信/华侨城/首开/华发；(6) 新增 `_normalize_stock_name`：去 Unicode 空白 + 全角转半角（U+FF01~U+FF5E → -0xFEE0，U+3000 跳过）；(7) `_infer_industry` 归一化后再匹配 |
+| `scripts/v43_push.py` | `add_multi_dimension_detail`：`moneyflow_state == "outflow"` 时追加 `⚠️MACD滞后于资金面，出现背离；建议按建议仓位的50%以下试仓` |
+| `strategies/macd_resonance/ai_scorer.py` | 规则打分档位：**≥85 强🟢 / ≥70 中🟡 / <70 弱⚪**（旧：75/60）；docstring 强调规则打分不是上涨概率 |
+| `tests/test_llm_analyzer.py` | 新增 20 项测试：止损 clamp 5 项、行业归一化 5 项、prompt 内容 3 项、打分档位 4 项、prompt 行业归一化 3 项 |
+
+## 测试结果
+
+- 修改前基线：152 passed
+- 修改后：**172 passed**（+20 项），1.93s
+
+## 修 4（超跌反弹/趋势突破门槛）本轮未改
+
+`docs/HANDOFF.md:362, 580, 596` 已经诊断过"牛市配 drop_20d_min=20% 结构性不可能"的问题，且 `adaptive_config.py OVERSOLD_PARAMS` 有 regime 分档参数。这是**设计议题而非 bug**——震荡上行/牛市中要求个股先跌 20~25% 才做超跌反弹，本质与"追强"策略冲突。真正修法需要 regime 条件表重构（已记录于 HANDOFF.md 593-597 行），非本轮修复范围。
+
+## 相关历史修复
+
+- 2026-09-21 ai_scorer 打分口径诚实化（`docs/ai_scorer_scoring_fix_2026-09-21.md`）：主字段 `probability → rule_score`，`score_basis="rule_based"`，推送顶部明确标注"规则打分 0~100，非上涨概率"
+
+---
+
+## 2026-09-23 行业推断扩展（第 2 轮审阅）
+
+### 背景
+
+第 2 轮审阅 2026-09-23 推送发现 5 只股票仍被错归"综合"：
+
+| 股票 | 旧推断 | 应为 |
+|---|---|---|
+| 千金药业(600479) | 综合 | 医药 |
+| 贵州茅台(600519) | 综合 | 食品饮料 |
+| 五粮液(000858) | 综合 | 食品饮料 |
+| 伊利股份(600887) | 综合 | 食品饮料 |
+| 莲花控股(600186) | 综合 | 食品饮料 |
+
+**根因**：INDUSTRY_KEYWORDS 关键词覆盖度不足——医药关键词里没有"药业"，食品饮料没有主流白酒/乳业龙头名字，莲花控股这类"名字和真实行业完全不相关"的股票关键词必然匹配不到。
+
+### 修复内容
+
+1. **`INDUSTRY_KEYWORDS` 扩展**
+   - 医药：补 `药业`（覆盖千金药业、白云山、太极集团、片仔癀、云南白药等所有"XX药业"股）
+   - 食品饮料：补白酒龙头（茅台/五粮液/泸州老窖/洋河/汾酒/古井/今世缘/舍得/水井坊/张裕）、乳业（伊利）、调味（双汇/海天/金龙鱼）、休闲食品（绝味/周黑鸭/千味）、其他（青岛啤酒/农夫山泉/养元饮品/安井/三全/思念）
+   - 汽车：补 `比亚迪`
+
+2. **新增 `STOCK_CODE_INDUSTRY` 代码兜底表**
+   - 收录原则：只收"名字和真实行业完全不相关"、"推送里大概率出现"、"行业归属无争议"的龙头
+   - 当前收录：`600186`→食品饮料（莲花控股）、`603866`→食品饮料（桃李面包）
+   - 兜底是安全网，不是掩盖关键词设计缺陷的借口
+
+3. **`_infer_industry(name, code=None)` 签名扩展**
+   - 优先级：名称关键词 → 代码兜底表 → "综合"
+   - 关键词命中即返回，绝不走兜底（避免兜底表覆盖关键词逻辑）
+   - code 为空/None 时不查询兜底表
+
+4. **4 处调用点更新**：`_build_analysis_prompt`、`_build_llm_interpretation`、`_analyze_fundamental`、`_mine_themes` 全部传入 code
+
+### 测试
+
+- 修改前：172 passed
+- 修改后：**181 passed**（+9 项行业扩展测试）
+
+### 相关历史
+
+- 2026-09-21 万科A 行业标签错标（半角空格+全角Ａ导致关键词匹配不到）
+- 本轮扩展是同一类问题的第二次修复：**关键词覆盖度不足**
+
+---
+
+## 2026-09-23 第二轮审阅补充：通富微电行业幻觉 + LLM prompt 约束
+
+### 背景
+
+第 3 轮审阅 2026-09-23 推送发现 1 只股票行业被 LLM **幻觉成医药**：
+
+| 股票 | 推送显示 | 真实行业 | 实测 `_infer_industry` |
+|---|---|---|---|
+| 通富微电(002156) | 医药 | **半导体封测（电子）** | 综合 ❌ |
+
+**根因**：通富微电名字里没有"电子/科技/半导体"字样，关键词匹配不到 → 兜底"综合" → LLM 在分析文本里**自己脑补成医药**（幻觉）。
+
+**修复方向**：双管齐下
+1. 后端：关键词 + 代码兜底表补通富微电
+2. 前端：LLM prompt 明确约束"不要自行判断行业"
+
+### 修复内容
+
+1. **`INDUSTRY_KEYWORDS["电子"]` 扩展**
+   - 补 `通富微电`（半导体封测，名字里没有"电子"）
+   - 补 `长电科技`、`华天科技`、`晶方科技`、`太极实业`、`晶瑞电材`（双保险，"科技/实业/电材"不命中"电子"关键词）
+
+2. **`STOCK_CODE_INDUSTRY` 扩展**
+   - 补 `002156` → 电子（通富微电，名字里没有行业词，走代码兜底）
+   - 补 `002138` → 电子（顺络电子，"电子"关键词命中，代码兜底表作双保险）
+
+3. **LLM prompt 新增【重要约束】段**
+   - 明确写出"行业字段由系统提供，必须引用该字段，绝对不要自行判断或改写"
+   - 历史事故示例："LLM 曾把半导体封测的通富微电脑补成医药行业"
+   - 兜底显示"综合"时，写"行业归属暂不明确"，不要凭感觉归类
+   - 风控数字必须严格使用给定数值，不要自造（历史事故：万科A -9.3% 止损）
+
+### 测试
+
+- 修改前：181 passed
+- 修改后：**190 passed**（+9 项新测试）
+  - 7 项行业扩展：通富微电（关键词+代码）、长电科技、华天科技、太极实业、晶瑞电材、顺络电子
+  - 2 项 prompt 约束：【重要约束】段、行业提示
+
+### 相关历史
+
+- 2026-09-21 万科A 行业标签错标（半角空格+全角Ａ）
+- 2026-09-23 第一轮扩展：关键词覆盖度不足（千金药业、茅台、五粮液、伊利、莲花控股）
+- 本轮（第二轮）：**LLM 幻觉**（通富微电脑补成医药）—— 后端 + prompt 双保险修复
+
+---
+
+## 2026-09-23 第三轮审阅：市场建议动态化 + 三策略全空警告
+
+### 背景
+
+第 3 轮审阅 2026-09-23 推送发现 3 个问题：
+
+| 问题 | 位置 | 严重性 |
+|---|---|---|
+| 顶部说"谨慎开仓"，但大盘 0/7 实际不允许开仓 | `market_cluster.py:290` | P0 Bug |
+| 三策略全空时没有明确警告 | `v43_push.py` | P1 文案 |
+| 硬过滤后剩 0 只时没有日志记录 | `scanner.py:458` | P2 诊断 |
+
+### 问题 1：市场建议硬编码（P0）
+
+**根因**：`market_cluster.py` 的 `REGIME_PARAMS` 里 recommendation 是写死的字符串，
+没根据 `market_gate` 实际分数动态调整：
+
+```python
+# market_cluster.py:290
+"sideways_down": {
+    "recommendation": "震荡下行：超跌反弹为主，谨慎开仓，仓位25%",  # ← 硬编码
+}
+```
+
+但 `market_gate.py` 的实际逻辑是：
+```python
+can_open = score >= MARKET_GATE["open_threshold"]  # score=0, can_open=False
+```
+
+**后果**：用户看到"谨慎开仓"以为可以下单，但大盘 0/7 实际应该**完全禁止开仓**。
+
+**修复**：新增 `_generate_dynamic_recommendation()` 函数，根据 market_gate 分数动态生成建议：
+
+```python
+- score < open_threshold(3.0)：⚠️ 暂停开仓，观望为主
+- open_threshold(3.0) <= score < standard_threshold(4.0)：谨慎开仓，轻仓试错
+- score >= standard_threshold(4.0)：使用原始 recommendation
+```
+
+### 问题 2：三策略全空无警告（P1）
+
+**根因**：当 MACD/超跌反弹/趋势突破三策略都返回"无推荐"时，推送没有明确警告，
+用户可能误以为系统出故障。
+
+**修复**：在 `v43_push.py` 里，当 `total_recommendations == 0` 时，
+增加明确警告文案：
+
+```
+⚠️ 市场极度弱势，三策略均无推荐
+   · 建议空仓观望，等待大盘评分回升至 3/7 以上
+   · 或手动筛选超跌反弹标的（跌幅>20%+MACD金叉）
+```
+
+### 问题 3：硬过滤 0 只无日志（P2）
+
+**根因**：硬过滤后剩 0 只时，只记录了"硬过滤通过 0 只，拒绝 N 只"，
+没有单独标记为异常，也没有记录拒绝原因统计。
+
+**修复**：在 `scanner.py` 里，当 `len(passed) == 0` 时，增加 WARNING 日志：
+
+```
+⚠️ 硬过滤后剩 0 只（初筛N只全部被拒），
+   可能原因：市场极度弱势/数据源异常/过滤条件过严
+   拒绝原因统计：{...}
+```
+
+### 测试
+
+- 修改前：190 passed
+- 修改后：**199 passed**（+9 项新测试）
+  - 9 项动态 recommendation 测试（覆盖 score=0/1/2/3/3.5/4/5、牛市、空 cluster_info）
+
+### 相关历史
+
+- 2026-09-21 万科A 行业标签错标（半角空格+全角＄）
+- 2026-09-23 第一轮扩展：关键词覆盖度不足（千金药业、茅台、五粮液、伊利、莲花控股）
+- 2026-09-23 第二轮扩展：LLM 幻觉（通富微电脑补成医药）
+- 本轮（第三轮）：**市场建议动态化**（硬编码"谨慎开仓"与实际评分矛盾）
+
+---
+
+## 2026-09-23 第四轮审阅：数据异常检测
+
+### 背景
+
+第 4 轮审阅 2026-09-23 推送发现 **3 个检测盲区**：
+
+| 问题 | 位置 | 严重性 |
+|---|---|---|
+| `data_validator.py` 只校验市场快照，不校验股票池 | `data_validator.py:36-69` | P0 |
+| `v43_push.py` 没有"硬过滤 0 只"的异常检测 | `v43_push.py:477-483` | P0 |
+| 健康度监控只跟踪"连续 0 推荐天数"，不跟踪"数据异常" | `health_monitor.py` | P1 |
+
+**历史事故**：2026-09-23 推送 3，硬过滤后剩 0 只，
+但 agent 没有检测到异常，直接推送"无推荐"消息给用户，
+用户误以为市场弱势，实际是数据源异常（price=0/cap=0）。
+
+### 问题 1：数据验证只覆盖市场快照（P0）
+
+**根因**：`data_validator.py` 的 `MarketData` 类只包含市场快照字段：
+
+```python
+@dataclass
+class MarketData:
+    """市场快照。"""
+    index_price: float          # 沪指点位
+    index_change_pct: float     # 沪指涨跌幅
+    volume_yi: float            # 两市成交额
+    limit_up_count: int
+    limit_down_count: int
+```
+
+**不校验股票池数据**（每只股票的 `price`、`cap`、`amount`），
+当股票池数据异常（`price=0`、`cap=0`）时，`data_validator` 检测不到。
+
+### 问题 2：推送没有"硬过滤 0 只"检测（P0）
+
+**根因**：`v43_push.py` 只检查 `total_recommendations == 0`（三策略全空），
+**不检查 `passed_count == 0`（硬过滤 0 只）**。
+
+硬过滤 0 只时，说明数据源可能异常，但推送没有提示。
+
+### 问题 3：健康度不跟踪"数据异常"（P1）
+
+**根因**：`health_monitor.py` 只跟踪"连续 0 推荐天数"，
+**不跟踪"硬过滤 0 只"异常**。
+
+数据异常时，健康度不会触发降级/告警。
+
+### 修复内容
+
+1. **`scanner.py` 增加 `data_anomaly` 标记**
+   - 硬过滤 0 只时，设置 `result["data_anomaly"] = True`
+   - 记录 `anomaly_reason` 和 `anomaly_details`（拒绝原因统计）
+
+2. **`v43_push.py` 增加数据异常推送告警**
+   - 三策略全空 + `data_anomaly=True` 时，推送：
+     ```
+     🚨 数据异常告警
+        · 硬过滤0只（初筛500只全部被拒）
+        · 最可能原因：600000 价格0元不在3.5-30元
+        · 建议检查东财接口是否正常，或等待下次推送
+        · 本次推送数据可能不准确，请勿据此交易
+     ```
+   - 三策略全空 + 无异常时，推送"市场极度弱势"提示
+
+3. **`health_monitor.py` 增加数据异常计数**
+   - 新增 `record_anomaly(anomaly_type, details, date)` 方法
+   - 新增 `anomaly_count` 和 `anomaly_history` 字段
+   - 异常历史只保留最近 50 条
+
+4. **`v43_push.py` 调用 `record_anomaly`**
+   - 数据异常时，调用 `health.record_anomaly()` 记录异常
+
+### 测试
+
+- 修改前：199 passed
+- 修改后：**207 passed**（+8 项新测试）
+  - 4 项 `record_anomaly` 测试（计数、历史、限制、独立性）
+  - 2 项 `scanner` 测试（硬过滤 0 只设置异常、硬过滤通过无异常）
+  - 2 项推送测试（异常告警、无异常提示）
+
+### 修复效果预览
+
+**修复前（推送 3）：**
+```
+📊 MACD共振：大盘0/7 🟢观望
+  无推荐｜硬过滤后仅剩0只
+
+⚠️ 市场极度弱势，三策略均无推荐
+   · 建议空仓观望，等待大盘评分回升至 3/7 以上
+```
+
+**修复后：**
+```
+📊 MACD共振：大盘0/7 🟢观望
+  无推荐｜硬过滤后仅剩0只
+
+🚨 数据异常告警
+   · 硬过滤0只（初筛500只全部被拒）
+   · 最可能原因：600000 价格0元不在3.5-30元
+   · 建议检查东财接口是否正常，或等待下次推送
+   · 本次推送数据可能不准确，请勿据此交易
+```
+
+---
+
+## 2026-09-23 第五轮审阅：数据异常预防
+
+### 背景
+
+第 5 轮系统性审查发现 **3 个未修复的盲区**：
+
+| 问题 | 位置 | 严重性 |
+|---|---|---|
+| 数据源返回异常数据时没有过滤 | `data_source.py:688-694` | P0 |
+| 硬过滤逻辑没有区分"数据异常"和"正常拒绝" | `filters.py:44-52` | P0 |
+| 健康度监控没有把异常计数纳入降级逻辑 | `health_monitor.py:109-129` | P1 |
+
+**根本原因**：数据源返回 `price=0` 或 `cap=0` 的股票，
+被硬过滤全部拒绝（price < 3.5 或 cap < 40），导致"硬过滤0只"。
+
+### 问题 1：数据源返回异常数据时没有过滤（P0）
+
+**根因**：`data_source.py` 的 `get_mainboard_stocks()` 没有过滤 `price=0` 或 `cap=0` 的股票：
+
+```python
+stocks.append({
+    "code": code,
+    "name": str(item.get("f14", "")),
+    "price": float(item.get("f2", 0) or 0),  # ← 如果 f2=0，price=0
+    "float_cap_yi": get_float_market_cap_yi(item),  # ← 如果 f20=None，cap=0
+    "amount_yi": get_amount_yi(item),
+})
+```
+
+**修复**：在 `get_mainboard_stocks()` 里过滤掉异常数据：
+
+```python
+# 过滤掉 price=0 或 cap=0 的股票（数据异常，避免硬过滤0只）
+if price <= 0 or cap <= 0:
+    continue
+```
+
+同样修复了 `_get_mainboard_stocks_sina()`（备用数据源）。
+
+### 问题 2：硬过滤逻辑没有区分"数据异常"和"正常拒绝"（P0）
+
+**根因**：`filters.py` 的 `pass_hard_filters()` 把 `price=0` 当作"正常拒绝"：
+
+```python
+# 3. 股价范围
+price = float(stock_info.get("price", 0) or 0)
+if price < HARD_FILTERS["price_min"] or price > HARD_FILTERS["price_max"]:
+    return False, f"{code} 价格{price:.2f}元不在{HARD_FILTERS['price_min']}-{HARD_FILTERS['price_max']}元"
+```
+
+**修复**：在 `pass_hard_filters()` 里区分"数据异常"和"正常拒绝"：
+
+```python
+# 3. 股价范围（数据异常：price=0）
+price = float(stock_info.get("price", 0) or 0)
+if price <= 0:
+    return False, f"{code} 数据异常：价格{price:.2f}元≤0"
+if price < HARD_FILTERS["price_min"] or price > HARD_FILTERS["price_max"]:
+    return False, f"{code} 价格{price:.2f}元不在{HARD_FILTERS['price_min']}-{HARD_FILTERS['price_max']}元"
+```
+
+同样修复了流通市值的判断。
+
+### 问题 3：健康度监控没有把异常计数纳入降级逻辑（P1）
+
+**根因**：`health_monitor.py` 的 `_check_degradation()` 只基于"连续 0 推荐天数"：
+
+```python
+def _check_degradation(self):
+    """检查是否需要降级。"""
+    zero_days = self.state["consecutive_zero_days"]
+    current_level = self.state["degradation_level"]
+    
+    # 计算应该降级到哪一级
+    target_level = 0
+    for level, threshold in sorted(DEGRADATION_THRESHOLDS.items()):
+        if zero_days >= threshold:
+            target_level = level
+```
+
+**修复**：在 `_check_degradation()` 里增加异常计数判断：
+
+```python
+def _check_degradation(self):
+    """检查是否需要降级。
+
+    降级触发条件（满足任一即降级）：
+    1. 连续 N 天 0 推荐（原有逻辑）
+    2. 累计 M 次数据异常（新增逻辑，防止数据源异常时误判为市场弱势）
+    """
+    zero_days = self.state["consecutive_zero_days"]
+    anomaly_count = self.state.get("anomaly_count", 0)
+    current_level = self.state["degradation_level"]
+
+    # 条件 1：连续 0 推荐天数触发降级
+    target_level = 0
+    for level, threshold in sorted(DEGRADATION_THRESHOLDS.items()):
+        if zero_days >= threshold:
+            target_level = level
+
+    # 条件 2：累计数据异常次数触发降级（至少 Level 1）
+    ANOMALY_DEGRADATION_THRESHOLD = 3  # 累计 3 次数据异常触发 Level 1
+    if anomaly_count >= ANOMALY_DEGRADATION_THRESHOLD and target_level < 1:
+        target_level = 1
+```
+
+同时在 `record_anomaly()` 里调用 `_check_degradation()`，确保异常计数触发降级。
+
+### 测试
+
+- 修改前：207 passed
+- 修改后：**216 passed**（+9 项新测试）
+  - 5 项 `filters` 测试（price=0/cap=0 数据异常、price/cap 低于最小值正常拒绝、正常股票通过）
+  - 4 项 `health_monitor` 测试（异常计数触发降级、低于阈值不降级、0推荐仍触发降级、组合条件触发降级）
+
+### 修复效果
+
+**修复前（推送 3）：**
+```
+数据源返回 price=0/cap=0 的股票 → 硬过滤全部拒绝 → "硬过滤0只"
+→ agent 没有检测到异常 → 推送"市场极度弱势" → 用户误以为市场弱势
+```
+
+**修复后：**
+```
+数据源返回 price=0/cap=0 的股票 → 数据源层过滤掉异常数据
+→ 如果仍有异常 → 硬过滤标记"数据异常" → 推送🚨告警
+→ 累计 3 次异常 → 健康度降级 Level 1 → 放宽过滤条件
+```
+
+### 相关历史
+
+- 2026-09-21 万科A 行业标签错标（半角空格+全角Ａ）
+- 2026-09-23 第一轮扩展：关键词覆盖度不足（千金药业、茅台、五粮液、伊利、莲花控股）
+- 2026-09-23 第二轮扩展：LLM 幻觉（通富微电脑补成医药）
+- 2026-09-23 第三轮：市场建议动态化（硬编码"谨慎开仓"与实际评分矛盾）
+- 2026-09-23 第四轮：数据异常检测（硬过滤0只但无告警）
+- 本轮（第五轮）：**数据异常预防**（数据源过滤 + 硬过滤区分 + 异常降级）

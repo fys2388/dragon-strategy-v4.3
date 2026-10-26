@@ -1,0 +1,562 @@
+# -*- coding: utf-8 -*-
+"""V1.0 策略推送入口（重写）。
+
+调用 MACD 多周期共振策略扫描器，推送飞书。
+兼容工作流调用：python scripts/v43_push.py
+
+报告类型由 REPORT_MODE 环境变量决定：
+- "premarket"：推送盘前报告（9:15 档），不扫描
+- "scan"    ：执行扫描并推送盘中实时报告
+- 未设置     ：按当前北京时间自动选择（9:15-9:30 窗口 → 盘前报告，其余交易时段 → 扫描）
+"""
+from __future__ import annotations
+
+import os
+import sys
+import threading
+from datetime import datetime
+
+# 允许直接运行脚本时导入 strategies 包
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# 同目录模块（feishu_client）。用绝对路径显式加入，
+# 无论本文件是被 `python scripts/v43_push.py` 直接运行还是被 import 都能找到。
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from feishu_client import check_feishu  # noqa: E402
+
+from strategies.macd_resonance.scanner import Scanner, build_message  # noqa: E402
+from strategies.macd_resonance.oversold_rebound import OversoldReboundScanner, build_oversold_message  # noqa: E402
+from strategies.macd_resonance.tracking import record_recommendations, update_performance  # noqa: E402
+from strategies.macd_resonance.llm_analyzer import StockAnalyzer, build_analysis_message  # noqa: E402
+from strategies.macd_resonance.breakout import BreakoutScanner, build_breakout_message  # noqa: E402
+from strategies.macd_resonance.health_monitor import init_health_monitor  # noqa: E402
+from strategies.macd_resonance.ai_scorer import init_ai_scorer  # noqa: E402
+from strategies.macd_resonance.market_cluster import init_market_cluster  # noqa: E402
+from strategies.macd_resonance import data_source as ds  # noqa: E402
+from strategies.macd_resonance.multi_dimension_filter import init_multi_filter  # noqa: E402
+from strategies.macd_resonance.sector_strength import get_strong_sectors, build_sector_report  # noqa: E402
+from strategies.macd_resonance.trading_calendar import is_trading_time, is_holiday, now_bjt  # noqa: E402
+
+SCAN_TIMEOUT_S = 480  # 扫描硬超时（秒）：数据源异常挂起时兜底
+SCAN_MAX_STOCKS = 1200  # 定时扫描标的池规模（按成交额降序，活跃标的；控制 5 分钟节奏内的耗时）
+
+
+def send_feishu_alert(text: str, title: str = "策略告警") -> bool:
+    """推送飞书告警。返回是否真的被飞书接受。"""
+    webhook = os.environ.get("FEISHU_WEBHOOK_URL", "")
+    if not webhook:
+        print("⚠️ 未配置 FEISHU_WEBHOOK_URL，告警未发送")
+        return False
+    import requests
+    try:
+        resp = requests.post(webhook, json={"msg_type": "text", "content": {"text": f"【{title}】{text}"}},
+                             timeout=8)
+    except Exception as e:  # noqa: BLE001
+        print(f"❌ 飞书告警失败: {type(e).__name__} {e}")
+        return False
+    ok, reason = check_feishu(resp)
+    if not ok:
+        print(f"❌ 飞书未接受告警: {reason}")
+    return ok
+
+
+def _exit_on_push_failure(ok: bool, what: str) -> None:
+    """推送未成功时以非零退出码结束，让 GitHub Actions 工作流变红。
+
+    背景：此前 _send_text 的返回值被完全忽略，webhook 失效时 workflow 仍显示 success，
+    调度器健康检查只数 workflow_dispatch 运行次数也看不出来 —— 用户可能连着几天
+    一条推送都没收到，却没有任何告警。这是 docs/HANDOFF.md §6.2 记录的盲区。
+    现在：推送失败 → 非零退出 → Actions 红点 + 健康检查的 failed_run 告警，双通道兜底。
+    """
+    if ok:
+        return
+    print(f"❌ {what}未成功推送到飞书，以非零退出码结束（让 Actions 变红作为告警兜底）")
+    sys.exit(1)
+
+
+def should_run(now: datetime) -> bool:
+    """运行窗口：盘前 9:15-9:30 + 交易时段 9:30-11:30/13:00-15:00。非交易日返回 False。"""
+    if is_holiday(now):
+        return False
+    hm = now.hour * 100 + now.minute
+    if 915 <= hm < 930:  # 盘前窗口（含 9:15 盘前推送）
+        return True
+    return is_trading_time(now)
+
+
+def _send_text(msg: str) -> bool:
+    """推送纯文本到飞书。返回是否真的被飞书接受（HTTP 200 且飞书状态码为 0）。"""
+    webhook = os.environ.get("FEISHU_WEBHOOK_URL", "")
+    if not webhook:
+        print("⚠️ 未配置 FEISHU_WEBHOOK_URL，跳过推送")
+        return False
+    import requests
+    try:
+        resp = requests.post(webhook, json={"msg_type": "text", "content": {"text": msg}}, timeout=8)
+    except Exception as e:  # noqa: BLE001
+        print(f"❌ 飞书推送失败: {type(e).__name__} {e}")
+        return False
+    ok, reason = check_feishu(resp)
+    if ok:
+        print(f"✅ 飞书推送完成（HTTP {resp.status_code}，已确认飞书接受）")
+    else:
+        print(f"❌ 飞书未接受推送: {reason}")
+    return ok
+
+
+# 最近一次打分器实例：add_ai_info_to_message 此前从未被调用，
+# 导致推送里根本看不到 AI/规则打分结果（只做了过滤，不显示分数）。
+_last_ai_scorer = None
+
+
+def ai_filter_entries(entries: list, strategy_type: str = "") -> list:
+    """用打分器过滤候选股票，只保留打分 ≥ 55（0~100）的。
+
+    有训练好的 LightGBM 模型时按模型概率过滤；没有模型时（当前状态）
+    按规则打分过滤，不是概率。打分器不可用时自动降级为原始推荐，不中断运行。
+    """
+    global _last_ai_scorer
+    if not entries:
+        return entries
+    try:
+        scorer = init_ai_scorer(min_probability=0.55)
+        scored = scorer.score_candidates(entries, strategy_type)
+        _last_ai_scorer = scorer
+        return scored
+    except Exception as e:
+        print(f"⚠️ 打分失败，保留原始推荐: {e}")
+        return entries
+
+
+def append_ai_score_block(msg: str, entries: list) -> str:
+    """把打分排序结果附加到推送消息末尾。
+
+    修复：原实现里 ``AIScorer.add_ai_info_to_message`` 没有任何调用方，
+    推送消息看不到打分结果，等于"过滤了但用户看不见为什么被过滤"。
+    """
+    if not entries or _last_ai_scorer is None:
+        return msg
+    try:
+        return _last_ai_scorer.add_ai_info_to_message(msg, entries)
+    except Exception as e:
+        print(f"⚠️ 打分信息附加失败: {e}")
+        return msg
+
+
+def add_multi_dimension_detail(entries: list) -> str:
+    """给推荐股票添加精简多维详情（一行摘要，只显示关键风险/机会）。
+
+    关键：资金流出时不能只贴一个"🔴资金流出"标签，MACD 是滞后指标、
+    共振选出的候选经常撞上资金流出的当天，用户会看到互相打架的信号。
+    这里显式写一句对冲说明，让用户明白「技术信号 vs 资金面」的取舍。
+    """
+    if not entries:
+        return ""
+    try:
+        details = []
+        for e in entries:
+            code = e.get("code", "")
+            name = e.get("name", "")
+            if code:
+                summary = []
+                moneyflow_state = None
+                try:
+                    from strategies.macd_resonance.moneyflow import check_moneyflow_trend
+                    mf = check_moneyflow_trend(code, days=5)
+                    moneyflow_state = mf.get("trend", "unknown")
+                    if moneyflow_state == "outflow":
+                        summary.append("🔴资金流出（主力连续减仓）")
+                    elif moneyflow_state == "strong_inflow":
+                        summary.append("🟢资金强流入")
+                except Exception:
+                    pass
+                try:
+                    from strategies.macd_resonance.news_monitor import get_news_sentiment
+                    news = get_news_sentiment(code)
+                    if news.get("bearish_count", 0) >= 2:
+                        summary.append(f"🔴利空{news['bearish_count']}条")
+                except Exception:
+                    pass
+                # 资金流出 → 显式提示用户 MACD 与资金面背离，需要降档仓位
+                if moneyflow_state == "outflow":
+                    summary.append(
+                        "⚠️MACD滞后于资金面，出现背离；建议按建议仓位的50%以下试仓"
+                    )
+                if summary:
+                    details.append(f"  ⚠️ {name}：{'、'.join(summary)}")
+        return "\n".join(details)
+    except Exception as e:
+        print(f"⚠️ 多维详情生成失败: {e}")
+        return ""
+
+
+def get_market_cluster_info() -> dict:
+    """获取当前市场聚类状态和策略建议。"""
+    try:
+        cluster = init_market_cluster()
+        index_df = ds.get_kline_daily("000001", count=60)
+        if index_df.empty:
+            return {}
+        # 用默认涨跌停数据（聚类主要看指数走势，涨跌停是辅助）
+        result = cluster.predict(index_df, limit_up_count=50, limit_down_count=0, total_volume_yi=10000)
+        params = cluster.get_strategy_params(result["cluster_name"])
+        result["strategy_params"] = params
+        return result
+    except Exception as e:
+        print(f"⚠️ 市场聚类获取失败: {e}")
+        return {}
+
+
+def _generate_dynamic_recommendation(cluster_info: dict, market_score: float) -> str:
+    """根据市场聚类 + 大盘评分生成动态建议。
+
+    历史事故：market_cluster.py 的 recommendation 是硬编码的"谨慎开仓"，
+    但 market_gate 实际分数 0/7 时应该"暂停开仓"。用户看到"谨慎开仓"
+    以为可以下单，但大盘 0/7 实际不允许开仓（can_open=False）。
+
+    动态规则：
+    - score < open_threshold(3.0)：暂停开仓，观望为主
+    - open_threshold(3.0) <= score < standard_threshold(4.0)：谨慎开仓，轻仓试错
+    - score >= standard_threshold(4.0)：使用原始 recommendation
+    """
+    from strategies.macd_resonance.config import MARKET_GATE
+    params = cluster_info.get("strategy_params", {})
+    base_recommendation = params.get("recommendation", "")
+
+    open_threshold = MARKET_GATE.get("open_threshold", 3.0)
+    standard_threshold = MARKET_GATE.get("standard_threshold", 4.0)
+
+    # 大盘评分过低（< open_threshold），明确禁止开仓
+    if market_score < open_threshold:
+        return f"⚠️ 大盘评分过低（{market_score:.0f}/7），暂停开仓，观望为主"
+
+    # 大盘评分中等（open_threshold ~ standard_threshold），谨慎开仓
+    if market_score < standard_threshold:
+        return f"谨慎开仓，轻仓试错（大盘{market_score:.0f}/7，宽松档）"
+
+    # 大盘评分高（>= standard_threshold），使用原始 recommendation
+    return base_recommendation
+
+
+def push_premarket_report() -> bool:
+    """盘前报告：复用 morning_noon_push 的生成逻辑（大盘概况+昨日推荐+持仓提醒）。"""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # scripts/ 目录
+    from morning_noon_push import build_premarket_report  # noqa: E402
+    msg = build_premarket_report()
+    print(msg)
+    print()
+    return _send_text(msg)
+
+
+def resolve_report_mode(now: datetime) -> str:
+    """由环境变量/时间决定报告类型：premarket | scan | skip。
+
+    REPORT_MODE 由工作流按触发档位显式传入（9:15 档 → premarket，盘中档 → scan），
+    不依赖当前时间，GitHub 调度延迟也不会把 9:15 档误判为盘中扫描。
+    例外：premarket 有延迟守卫——若在 9:45 之后才运行则跳过（见函数内注释）。
+    节假日（含周末）无论 REPORT_MODE 为何值一律跳过。
+    """
+    # 节假日：无论什么模式都跳过（Worker 在节假日也会触发，此处是最终防线）
+    if is_holiday(now):
+        return "skip"
+
+    mode = os.environ.get("REPORT_MODE", "").strip().lower()
+    if mode == "premarket":
+        # 守卫（按时间判断，不区分触发来源）：9:15 档若被延迟到 9:45 之后才运行，
+        # 跳过推送，避免迟到盘前报告与盘中实时报告撞车。
+        # 注：GitHub schedule 已禁用、外部调度器走 workflow_dispatch，
+        #     早期"仅 TRIGGER==schedule 才守卫"的条件永不成立（空转），故改为按时间判断。
+        # 窗口外需要手动补发盘前报告时：用 morning_noon_push.yml 的 workflow_dispatch
+        # （该工作流直接调用 morning_noon_push.py，不经过本守卫）。
+        hm = now.hour * 100 + now.minute
+        if hm >= 945:
+            print(f"⏰ 盘前档被延迟到 {now.strftime('%H:%M')}，已过盘前窗口，跳过（避免与盘中重复）")
+            return "skip"
+        return "premarket"
+    if mode == "scan":
+        return "scan"
+    # 手动触发（REPORT_MODE 为空）：按当前时间自动选择
+    # is_holiday 已在函数开头拦截节假日，此处仅按时间自动选择
+    hm = now.hour * 100 + now.minute
+    if 915 <= hm < 930:
+        return "premarket"
+    return "scan" if is_trading_time(now) else "skip"
+
+
+def main():
+    now = now_bjt()
+    test_mode = os.environ.get("TEST_MODE", "").lower() == "true"
+    report_mode = resolve_report_mode(now)
+    print(f"[交易时段检查] 北京时间={now.strftime('%Y-%m-%d %H:%M:%S')} "
+          f"weekday={now.weekday()} is_trading={is_trading_time(now)} "
+          f"should_run={should_run(now)} test_mode={test_mode} report_mode={report_mode}")
+
+    if test_mode:
+        report_mode = "scan"  # 测试模式始终执行扫描（供手动验证数据源/推送链路）
+    if report_mode == "skip":
+        print(f"📌 非交易时段 {now.strftime('%Y-%m-%d %H:%M')}，退出")
+        return
+    if report_mode == "premarket":
+        _exit_on_push_failure(push_premarket_report(), "盘前报告")
+        return
+
+    # 健康度监控：检查连续0推荐，自动降级
+    # ★ param_override 现在会真正传入三个扫描器（此前只 print，从未作用于扫描）
+    health = init_health_monitor()
+    param_override = health.get_current_params_override()
+    if param_override["level"] > 0:
+        print(f"⚠️ 系统处于降级状态 Level {param_override['level']}："
+              f"{param_override['general'].get('note', '')}（已作用于三个扫描器）")
+
+    scanner = Scanner()
+    # 硬超时看门狗：数据源在云端异常挂起时，强制结束扫描，避免阻塞节奏
+    result_box: dict = {}
+
+    def _scan():
+        result_box["r"] = scanner.run(need_push=True, max_stocks=SCAN_MAX_STOCKS,
+                                      param_override=param_override)
+
+    t = threading.Thread(target=_scan, daemon=True)
+    t.start()
+    t.join(timeout=SCAN_TIMEOUT_S)
+    if t.is_alive():
+        print(f"⏰ 扫描超过 {SCAN_TIMEOUT_S}s 超时，强制结束（数据源可能异常）")
+        result = {"summary": f"扫描超时（>{SCAN_TIMEOUT_S}s），已中断"}
+        try:
+            send_feishu_alert(f"扫描超时（>{SCAN_TIMEOUT_S}s），数据源可能异常。", "扫描超时")
+        except Exception as e:  # noqa: BLE001
+            print(f"⚠️ 超时告警推送失败: {e}")
+    else:
+        result = result_box.get("r", {"summary": "扫描无结果"})
+    # AI打分过滤：只保留上涨概率>55%的候选
+    result["entries"] = ai_filter_entries(result.get("entries", []), "resonance")
+    msg = build_message(result)
+    # 多维详情（仅共振推荐有）
+    resonance_entries = result.get("entries", [])
+    if resonance_entries:
+        multi_detail = add_multi_dimension_detail(resonance_entries)
+        if multi_detail:
+            msg = msg + "\n" + multi_detail
+    msg = append_ai_score_block(msg, resonance_entries)
+    print(msg)
+    print("\n[SUMMARY]", result["summary"])
+
+    # 收集所有策略消息，最后合并推送（避免三条消息轰炸）
+    all_messages = [msg]
+
+    # 记录MACD共振推荐股到绩效跟踪
+    scan_time = result.get("scan_time", now_bjt().strftime("%Y-%m-%d %H:%M:%S"))
+    resonance_entries = result.get("entries", [])
+    if resonance_entries:
+        regime = result.get("regime", "unknown")
+        record_recommendations(resonance_entries, "resonance", scan_time, regime)
+
+    # ===== 超跌反弹模式（并行第二策略）=====
+    try:
+        print("\n" + "=" * 50)
+        print("🚀 开始超跌反弹模式扫描...")
+        oversold_scanner = OversoldReboundScanner()
+        oversold_box: dict = {}
+
+        def _oversold_scan():
+            oversold_box["r"] = oversold_scanner.run(need_push=True, max_stocks=SCAN_MAX_STOCKS,
+                                                     param_override=param_override)
+
+        t2 = threading.Thread(target=_oversold_scan, daemon=True)
+        t2.start()
+        t2.join(timeout=SCAN_TIMEOUT_S)
+        if t2.is_alive():
+            print(f"⏰ 超跌反弹扫描超过 {SCAN_TIMEOUT_S}s 超时")
+            oversold_result = {"summary": "超跌反弹扫描超时", "diagnosis": "", "scan_elapsed": 0, "entries": []}
+        else:
+            oversold_result = oversold_box.get("r", {"summary": "超跌反弹扫描无结果"})
+
+        # AI打分过滤
+        oversold_result["entries"] = ai_filter_entries(oversold_result.get("entries", []), "oversold")
+        oversold_msg = build_oversold_message(oversold_result)
+        oversold_msg = append_ai_score_block(oversold_msg, oversold_result.get("entries", []))
+        oversold_entries = oversold_result.get("entries", [])
+        print(oversold_msg)
+        print("\n[OVERSOLD SUMMARY]", oversold_result.get("summary", ""))
+        all_messages.append(oversold_msg)
+
+        # 记录超跌反弹推荐股到绩效跟踪
+        if oversold_entries:
+            oversold_time = oversold_result.get("scan_time", now_bjt().strftime("%Y-%m-%d %H:%M:%S"))
+            oversold_regime = oversold_result.get("regime", "unknown")
+            record_recommendations(oversold_entries, "oversold", oversold_time, oversold_regime)
+    except Exception as e:
+        print(f"❌ 超跌反弹扫描异常: {e}")
+        try:
+            send_feishu_alert(f"超跌反弹模式异常: {e}", "策略异常")
+        except Exception:
+            pass
+
+    breakout_result = {"entries": []}  # 初始化，防止异常时未定义
+    # ===== 趋势突破模式（第三策略，震荡市补充）=====
+    try:
+        print("\n" + "=" * 50)
+        print("🚀 开始趋势突破模式扫描...")
+        breakout_scanner = BreakoutScanner()
+        breakout_box: dict = {}
+
+        def _breakout_scan():
+            breakout_box["r"] = breakout_scanner.run(need_push=True, max_stocks=SCAN_MAX_STOCKS,
+                                                     param_override=param_override)
+
+        t3 = threading.Thread(target=_breakout_scan, daemon=True)
+        t3.start()
+        t3.join(timeout=SCAN_TIMEOUT_S)
+        if t3.is_alive():
+            print(f"⏰ 趋势突破扫描超过 {SCAN_TIMEOUT_S}s 超时")
+            breakout_result = {"summary": "趋势突破扫描超时", "diagnosis": "", "scan_elapsed": 0, "entries": []}
+        else:
+            breakout_result = breakout_box.get("r", {"summary": "趋势突破扫描无结果"})
+
+        # AI打分过滤
+        breakout_result["entries"] = ai_filter_entries(breakout_result.get("entries", []), "breakout")
+        breakout_msg = build_breakout_message(breakout_result)
+        breakout_msg = append_ai_score_block(breakout_msg, breakout_result.get("entries", []))
+        breakout_entries = breakout_result.get("entries", [])
+        print(breakout_msg)
+        print("\n[BREAKOUT SUMMARY]", breakout_result.get("summary", ""))
+        all_messages.append(breakout_msg)
+
+        # 记录趋势突破推荐股
+        if breakout_entries:
+            breakout_time = breakout_result.get("scan_time", now_bjt().strftime("%Y-%m-%d %H:%M:%S"))
+            breakout_regime = breakout_result.get("regime", "unknown")
+            record_recommendations(breakout_entries, "breakout", breakout_time, breakout_regime)
+    except Exception as e:
+        print(f"❌ 趋势突破扫描异常: {e}")
+        try:
+            send_feishu_alert(f"趋势突破模式异常: {e}", "策略异常")
+        except Exception:
+            pass
+
+    # 统计今日总推荐数
+    total_recommendations = (
+        len(result.get("entries", [])) +
+        len(oversold_result.get("entries", [])) +
+        len(breakout_result.get("entries", []))
+    )
+
+    # 健康度监控：记录今日推荐数
+    health.record_recommendations(total_recommendations)
+    if total_recommendations == 0:
+        print(f"⚠️ 今日0推荐，连续0推荐天数：{health.state['consecutive_zero_days']}天")
+        if health.state["degradation_level"] > 0:
+            print(f"   当前降级等级：Level {health.state['degradation_level']}")
+    else:
+        print(f"✅ 今日推荐{total_recommendations}只，系统状态正常")
+
+    sector_report = ""  # 已精简：去掉强势板块
+
+    # 获取市场聚类状态
+    cluster_info = get_market_cluster_info()
+    cluster_header = ""
+    if cluster_info:
+        # 根据市场评分动态生成建议（避免硬编码"谨慎开仓"与实际评分矛盾）
+        recommendation = _generate_dynamic_recommendation(
+            cluster_info, result.get("market_score", 0.0)
+        )
+        cluster_header = (
+            f"🧠 AI市场状态：{cluster_info.get('cluster_name_cn', '未知')}"
+            f"（{cluster_info.get('cluster_name', '')}）\n"
+            f"📌 {recommendation}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        )
+
+    # ===== LLM 智能分析：对所有策略的推荐统一分析 =====
+    all_recommended = []
+    for entries_list in [
+        result.get("entries", []),
+        oversold_result.get("entries", []),
+        breakout_result.get("entries", []),
+    ]:
+        all_recommended.extend(entries_list)
+
+    combined_msg = cluster_header + sector_report + "\n\n".join(all_messages)
+
+    # 三策略全空时，增加明确警告（避免用户误以为系统出故障）
+    if total_recommendations == 0:
+        # 检查是否有数据异常（硬过滤0只）
+        if result.get("data_anomaly"):
+            anomaly_reason = result.get("anomaly_reason", "未知原因")
+            anomaly_details = result.get("anomaly_details", {})
+            top_reason = list(anomaly_details.keys())[0] if anomaly_details else "未知"
+            combined_msg += (
+                f"\n\n🚨 数据异常告警\n"
+                f"   · {anomaly_reason}\n"
+                f"   · 最可能原因：{top_reason}\n"
+                f"   · 建议检查东财接口是否正常，或等待下次推送\n"
+                f"   · 本次推送数据可能不准确，请勿据此交易\n"
+            )
+        else:
+            combined_msg += (
+                "\n\n⚠️ 市场极度弱势，三策略均无推荐\n"
+                "   · 建议空仓观望，等待大盘评分回升至 3/7 以上\n"
+                "   · 或手动筛选超跌反弹标的（跌幅>20%+MACD金叉）\n"
+            )
+
+    if all_recommended:
+        try:
+            print(f"\n🧠 开始 LLM 智能分析（{len(all_recommended)} 只推荐）...")
+            analyzer = StockAnalyzer()
+            analyzed = analyzer.analyze_batch(all_recommended)
+            analysis_msg = build_analysis_message(analyzed)
+            if analysis_msg:
+                combined_msg += analysis_msg
+        except Exception as e:
+            print(f"⚠️ LLM 智能分析失败（降级为无分析推送）: {e}")
+
+    # 合并所有策略消息为一条推送
+    push_ok = _send_text(combined_msg)
+    print(f"\n📨 合并推送完成，共{len(all_messages)}个策略模块，市场状态={cluster_info.get('cluster_name_cn', '未知')}")
+
+    # 记录当日推荐数到健康度监控，驱动降级/恢复
+    # ★ 必须显式传北京时间日期：GitHub Actions 的 datetime.now() 是 UTC，
+    #   health_monitor 默认的日期会把一个交易日拆成两个日期，
+    #   使"连续0推荐天数"错乱（这正是降级长期不触发、Level 恒为 0 的原因之一）。
+    try:
+        bjt_date = now_bjt().strftime("%Y-%m-%d")
+        health.record_recommendations(len(all_recommended), date=bjt_date)
+        # 记录数据异常（硬过滤0只）
+        if result.get("data_anomaly"):
+            health.record_anomaly(
+                anomaly_type="硬过滤0只",
+                details={
+                    "passed_count": result.get("passed_count", 0),
+                    "candidates_count": result.get("candidates_count", 0),
+                    "anomaly_reason": result.get("anomaly_reason", ""),
+                },
+                date=bjt_date,
+            )
+        new_level = health.get_current_params_override()["level"]
+        print(f"[健康度] {bjt_date} 累计推荐 {len(all_recommended)} 只 → 降级 Level {new_level}"
+              f"{'（下一档扫描开始生效）' if new_level > param_override['level'] else ''}")
+    except Exception as e:
+        print(f"⚠️ 健康度记录失败: {e}")
+
+    # 打印健康度报告
+    print("\n" + health.get_health_report())
+
+    # 更新所有跟踪股票的表现（每天最后一次扫描时执行）
+    try:
+        now = now_bjt()
+        # 下午14:30之后的扫描执行表现更新（一天一次足够）
+        if now.hour >= 14 and now.minute >= 30:
+            print("\n" + "=" * 50)
+            print("📊 更新选股绩效跟踪...")
+            stats = update_performance()
+            print(f"[跟踪] 总计{stats['total']}只，更新{stats['updated']}只，完成{stats['completed']}只")
+    except Exception as e:
+        print(f"⚠️ 绩效跟踪更新失败: {e}")
+
+    # 推送失败必须以非零退出码结束 —— 见 _exit_on_push_failure 的注释。
+    # 刻意放在最后：绩效跟踪更新是当天唯一一次，不因推送失败而跳过。
+    _exit_on_push_failure(push_ok, "盘中扫描报告")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,11 @@
+{
+  "provider": "deepseek",
+  "api_key": "sk-xxxxxxxxxxxxxxxxxxxxxxxx",
+  "_说明": "此文件仅本地调试用，不要提交到仓库。云端通过 GitHub Secrets LLM_API_KEY 传入。",
+  "_provider对照": {
+    "deepseek": {"api_base": "https://api.deepseek.com/v1", "model": "deepseek-chat", "备注": "免费100万token"},
+    "sensenova": {"api_base": "https://platform.sensenova.cn/v1", "model": "sensenova-6.7-flash", "备注": "商量平台"},
+    "openrouter": {"api_base": "https://openrouter.ai/api/v1", "model": "deepseek/deepseek-chat:free", "备注": "聚合平台"},
+    "openai": {"api_base": "https://api.openai.com/v1", "model": "gpt-4o-mini", "备注": "付费"}
+  }
+}

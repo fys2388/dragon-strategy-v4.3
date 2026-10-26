@@ -1,0 +1,32 @@
+name: 每周策略回测与参数优化
+
+on:
+  schedule:
+    # 每周日 UTC 13:00 = 北京时间 21:00（在绩效报告之后运行）
+    - cron: '0 13 * * 0'
+  workflow_dispatch:
+
+jobs:
+  weekly-optimization:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install requests pandas -q
+
+      - name: Run weekly optimization
+        env:
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          PUSH_FEISHU: 'true'
+          IS_CLOUD: 'true'
+        run: |
+          python scripts/weekly_optimization.py

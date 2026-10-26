@@ -1,0 +1,444 @@
+# -*- coding: utf-8 -*-
+"""选股结果绩效跟踪模块。
+
+记录每次推荐的股票，自动跟踪后续3/5/10/20日表现，
+为策略优化和自适应参数提供数据基础。
+"""
+from __future__ import annotations
+
+import json
+import os
+import time
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional
+
+from . import data_source as ds
+from .trading_calendar import is_trading_day as _cal_is_trading_day
+from .trading_calendar import now_bjt
+from .loop_config import (COMPLETION_DAY, COMPLETION_DAY_FIELD, FULL_TRACK_DAYS,
+                          completion_summary)
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+TRACKING_FILE = os.path.join(BASE_DIR, "data", "tracking.jsonl")
+PERFORMANCE_FILE = os.path.join(BASE_DIR, "data", "performance_summary.json")
+
+# 记录时透传的策略特征字段：周度优化器按位置类型 / 基本面评级分组分析时读取。
+# 之前 tracking 只存 code/name/price/score/reason，weekly_optimizer 的 by_position /
+# by_grade 分组永远拿到 "unknown"，导致整套分维度分析形同虚设。
+EXTRA_TRACK_FIELDS = (
+    "position_type", "huangyang_grade", "huangyang_score",
+    "vol_price_health", "strategy_mode",
+    "ai_probability", "ai_rule_score", "ai_score_basis", "ai_model",
+)
+
+
+def _load_records() -> List[Dict]:
+    """加载所有跟踪记录。"""
+    if not os.path.exists(TRACKING_FILE):
+        return []
+    records = []
+    with open(TRACKING_FILE, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                try:
+                    records.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    return records
+
+
+def _save_records(records: List[Dict]):
+    """保存所有跟踪记录（全量覆盖，用于更新）。"""
+    os.makedirs(os.path.dirname(TRACKING_FILE), exist_ok=True)
+    with open(TRACKING_FILE, "w", encoding="utf-8") as f:
+        for r in records:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+
+def _append_record(record: Dict):
+    """追加一条新记录。"""
+    os.makedirs(os.path.dirname(TRACKING_FILE), exist_ok=True)
+    with open(TRACKING_FILE, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def record_recommendations(entries: List[Dict], strategy_type: str, scan_time: str, regime: str = "unknown"):
+    """记录一次扫描的推荐股票。
+
+    Args:
+        entries: 推荐股票列表，每项需含 code/name/price
+        strategy_type: 策略类型 resonance / oversold
+        scan_time: 扫描时间字符串
+        regime: 市场环境
+    """
+    if not entries:
+        return 0
+
+    existing = _load_records()
+    existing_codes = {(r["code"], r["recommend_time"][:10]) for r in existing}
+
+    new_count = 0
+    for e in entries:
+        code = str(e.get("code", ""))
+        name = str(e.get("name", ""))
+        price = float(e.get("price", 0) or 0)
+        if not code or price <= 0:
+            continue
+        # 同一天同一只股票不重复记录
+        date_key = scan_time[:10]
+        if (code, date_key) in existing_codes:
+            continue
+
+        record = {
+            "code": code,
+            "name": name,
+            "strategy": strategy_type,
+            "regime": regime,
+            "recommend_price": price,
+            "recommend_time": scan_time,
+            "recommend_date": date_key,
+            "score": e.get("score", 0),
+            "reason": e.get("reason", ""),
+            # 策略特征透传（供周度优化器分维度分析）：只写入候选条目里真实存在的字段
+            **{k: e.get(k) for k in EXTRA_TRACK_FIELDS if k in e},
+            "status": "tracking",
+            "track_days": 0,
+            "current_price": price,
+            "current_return_pct": 0.0,
+            "max_drawdown_pct": 0.0,
+            "mae_pct": 0.0,          # 最大不利波动（最大浮亏）
+            "mfe_pct": 0.0,          # 最大有利波动（最大浮盈）
+            "mae_day": None,         # MAE发生在第几天
+            "mfe_day": None,         # MFE发生在第几天
+            "day1_close": None,
+            "day1_return_pct": None,
+            "day3_close": None,
+            "day3_return_pct": None,
+            "day5_close": None,
+            "day5_return_pct": None,
+            "day10_close": None,
+            "day10_return_pct": None,
+            "day20_close": None,
+            "day20_return_pct": None,
+            "price_history": [],  # 每日收盘价记录
+            "updated_at": scan_time,
+        }
+        _append_record(record)
+        new_count += 1
+
+    print(f"[跟踪] 新记录 {new_count} 只推荐股（策略={strategy_type}）")
+    return new_count
+
+
+def get_daily_recommend_counts(strategy: str = None) -> Dict[str, int]:
+    """按日期统计推荐数量。
+
+    Args:
+        strategy: 只统计某个策略（resonance / oversold / breakout）；None 表示全部。
+
+    Returns:
+        {YYYY-MM-DD: count}，按日期升序。
+
+    用途：health_monitor 与 breakout 饥饿度判断需要「某天到底推荐了几只」，
+    此前各模块自己从 tracking.jsonl 解析且字段名用错（找 scan_time，实际存的是
+    recommend_time），导致连续0推荐天数恒为 0 或恒为 7。这里统一口径。
+    """
+    counts: Dict[str, int] = {}
+    for r in _load_records():
+        rec_date = str(r.get("recommend_date", "") or str(r.get("recommend_time", ""))[:10])
+        if not rec_date:
+            continue
+        if strategy and r.get("strategy") != strategy:
+            continue
+        counts[rec_date] = counts.get(rec_date, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _is_trading_day(date: datetime) -> bool:
+    """判断是否为交易日（周一到周五且非法定节假日）。"""
+    return _cal_is_trading_day(date)
+
+
+def _get_trading_days(start_date: str, count: int) -> List[str]:
+    """获取从start_date开始的count个交易日日期列表。"""
+    days = []
+    current = datetime.strptime(start_date, "%Y-%m-%d")
+    while len(days) < count:
+        current += timedelta(days=1)
+        if _is_trading_day(current):
+            days.append(current.strftime("%Y-%m-%d"))
+    return days
+
+
+def update_performance() -> Dict:
+    """更新所有跟踪中股票的表现。
+
+    Returns:
+        更新统计：{updated, completed, tracking}
+    """
+    records = _load_records()
+    now = now_bjt()
+    today_str = now.strftime("%Y-%m-%d")
+
+    updated = 0
+    completed = 0
+    still_tracking = 0
+
+    for r in records:
+        if r.get("status") == "completed":
+            continue
+
+        code = r["code"]
+        recommend_date = r["recommend_date"]
+        recommend_price = r["recommend_price"]
+
+        # 获取从推荐日到今天的日K线
+        try:
+            df = ds.get_kline_daily(code, count=30)
+            if df.empty:
+                continue
+        except Exception as e:
+            print(f"[跟踪] {code} 获取K线失败: {e}")
+            continue
+
+        # 构建日期->收盘价映射
+        df["date_str"] = df["date"].astype(str).str[:10]
+        price_map = dict(zip(df["date_str"], df["close"].astype(float)))
+        high_map = dict(zip(df["date_str"], df["high"].astype(float)))
+        low_map = dict(zip(df["date_str"], df["low"].astype(float)))
+
+        # 获取交易日序列（+1 天余量，避免最后几天算不到）
+        trading_days = _get_trading_days(recommend_date, FULL_TRACK_DAYS + 1)
+
+        # 更新各周期收益
+        price_history = r.get("price_history", [])
+        max_price = recommend_price
+        min_price_after = recommend_price
+        full_window_done = False
+
+        for i, day in enumerate(trading_days, 1):
+            if day not in price_map:
+                # 推算的交易日与真实成交日错位（法定节假日 / 停牌）时跳过该天，
+                # 不能 break：原实现遇到第一个缺口就整段中断，
+                # 导致短窗口收益（day3/day5）在冷启动期经常永远算不出来。
+                continue
+            close = price_map[day]
+            high = high_map.get(day, close)
+            low = low_map.get(day, close)
+
+            # 记录价格历史
+            if not any(p.get("date") == day for p in price_history):
+                price_history.append({"date": day, "close": close, "high": high, "low": low})
+
+            # 计算最大回撤（从推荐后的最高点到后续最低点）
+            if high > max_price:
+                max_price = high
+            drawdown = (max_price - low) / max_price * 100 if max_price > 0 else 0
+            if drawdown > r.get("max_drawdown_pct", 0):
+                r["max_drawdown_pct"] = round(drawdown, 2)
+
+            # 计算MAE（最大不利波动=最大浮亏）
+            mae = (recommend_price - low) / recommend_price * 100 if recommend_price > 0 else 0
+            if mae > r.get("mae_pct", 0):
+                r["mae_pct"] = round(mae, 2)
+                r["mae_day"] = i
+
+            # 计算MFE（最大有利波动=最大浮盈）
+            mfe = (high - recommend_price) / recommend_price * 100 if recommend_price > 0 else 0
+            if mfe > r.get("mfe_pct", 0):
+                r["mfe_pct"] = round(mfe, 2)
+                r["mfe_day"] = i
+
+            # 更新各周期收盘价和收益率
+            ret = round((close - recommend_price) / recommend_price * 100, 2)
+            if i == 1:
+                r["day1_close"] = close
+                r["day1_return_pct"] = ret
+            elif i == 3:
+                r["day3_close"] = close
+                r["day3_return_pct"] = ret
+            elif i == 5:
+                r["day5_close"] = close
+                r["day5_return_pct"] = ret
+            elif i == 10:
+                r["day10_close"] = close
+                r["day10_return_pct"] = ret
+            elif i == FULL_TRACK_DAYS:
+                r["day20_close"] = close
+                r["day20_return_pct"] = ret
+                full_window_done = True
+
+            r["track_days"] = i
+
+        # 完成判定：第 COMPLETION_DAY 个交易日的收益可用即标记 completed。
+        # 原实现在第 20 个交易日才 completed —— 每周 1-2 只推荐 × 20 个交易日，
+        # 叠加周度优化器（≥5 条）与进化引擎（≥10 条）的样本门，冷启动期永远打不开，
+        # 这是 Agent 学习闭环长期空转的根因之一。5/10/20 日收益仍照常计算，
+        # 只是 completed 标记提前：短窗口先供优化，长窗口留给绩效报告。
+        if r.get("status") != "completed" and (
+            full_window_done or r.get(COMPLETION_DAY_FIELD) is not None
+        ):
+            r["status"] = "completed"
+            r["completed_at"] = now.strftime("%Y-%m-%d %H:%M:%S")
+            completed += 1
+
+        # 更新当前价格和收益（取已记录价格历史中的最新一条）
+        if price_history:
+            latest = max(price_history, key=lambda p: str(p.get("date", "")))
+            current_price = price_map.get(latest.get("date"))
+            if current_price:
+                r["current_price"] = current_price
+                r["current_return_pct"] = round((current_price - recommend_price) / recommend_price * 100, 2)
+
+        r["price_history"] = price_history[-25:]  # 只保留最近25条
+        r["updated_at"] = now.strftime("%Y-%m-%d %H:%M:%S")
+
+        if r["status"] == "tracking":
+            still_tracking += 1
+        updated += 1
+
+    _save_records(records)
+
+    stats = {"updated": updated, "completed": completed, "tracking": still_tracking, "total": len(records)}
+    print(f"[跟踪] 更新完成：总计{stats['total']}只，更新{updated}只，已完成{completed}只，跟踪中{still_tracking}只")
+    return stats
+
+
+def get_performance_summary() -> Dict:
+    """生成策略绩效汇总。"""
+    records = _load_records()
+    if not records:
+        return {"total": 0, "message": "暂无跟踪数据"}
+
+    def calc_stats(records_subset: List[Dict], day_key: str) -> Dict:
+        """计算某周期的统计指标。"""
+        valid = [r for r in records_subset if r.get(day_key) is not None]
+        if not valid:
+            return {"count": 0, "win_rate": 0, "avg_return": 0, "max_return": 0, "min_return": 0}
+        returns = [r[day_key] for r in valid]
+        wins = [r for r in returns if r > 0]
+        avg_mae = round(sum(r.get("mae_pct", 0) for r in valid) / len(valid), 2)
+        avg_mfe = round(sum(r.get("mfe_pct", 0) for r in valid) / len(valid), 2)
+        # 盈亏效率比 = MFE/MAE，>1说明盈利空间大于亏损空间
+        efficiency = round(avg_mfe / avg_mae, 2) if avg_mae > 0 else 0
+        return {
+            "count": len(valid),
+            "win_rate": round(len(wins) / len(valid) * 100, 1),
+            "avg_return": round(sum(returns) / len(valid), 2),
+            "max_return": round(max(returns), 2),
+            "min_return": round(min(returns), 2),
+            "avg_max_drawdown": round(sum(r.get("max_drawdown_pct", 0) for r in valid) / len(valid), 2),
+            "avg_mae": avg_mae,           # 平均最大浮亏
+            "avg_mfe": avg_mfe,           # 平均最大浮盈
+            "efficiency_ratio": efficiency,  # 盈亏效率比 MFE/MAE
+        }
+
+    summary = {
+        "total": len(records),
+        "tracking": len([r for r in records if r["status"] == "tracking"]),
+        "completed": len([r for r in records if r["status"] == "completed"]),
+        "by_strategy": {},
+        # 跟踪口径写进报告本身：完成窗口和样本门槛不再是黑箱数字
+        "tracking_config": completion_summary(),
+    }
+
+    for strategy in ["resonance", "oversold", "breakout"]:
+        subset = [r for r in records if r.get("strategy") == strategy]
+        if not subset:
+            continue
+        strategy_stats = {
+            "total": len(subset),
+            "tracking": len([r for r in subset if r["status"] == "tracking"]),
+            "completed": len([r for r in subset if r["status"] == "completed"]),
+            "day1": calc_stats(subset, "day1_return_pct"),
+            "day3": calc_stats(subset, "day3_return_pct"),
+            "day5": calc_stats(subset, "day5_return_pct"),
+            "day10": calc_stats(subset, "day10_return_pct"),
+            "day20": calc_stats(subset, "day20_return_pct"),
+        }
+        summary["by_strategy"][strategy] = strategy_stats
+
+    # 总体
+    summary["overall"] = {
+        "day1": calc_stats(records, "day1_return_pct"),
+        "day3": calc_stats(records, "day3_return_pct"),
+        "day5": calc_stats(records, "day5_return_pct"),
+        "day10": calc_stats(records, "day10_return_pct"),
+        "day20": calc_stats(records, "day20_return_pct"),
+    }
+
+    # 保存汇总
+    os.makedirs(os.path.dirname(PERFORMANCE_FILE), exist_ok=True)
+    with open(PERFORMANCE_FILE, "w", encoding="utf-8") as f:
+        json.dump(summary, f, ensure_ascii=False, indent=2)
+
+    return summary
+
+
+def build_performance_message(summary: Dict) -> str:
+    """生成绩效报告飞书消息。"""
+    now = now_bjt().strftime("%Y-%m-%d %H:%M")
+    lines = [
+        f"📊 策略绩效跟踪报告 {now}",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        "",
+        f"📈 总跟踪：{summary.get('total', 0)}只 | 跟踪中：{summary.get('tracking', 0)}只 | 已完成：{summary.get('completed', 0)}只",
+        "",
+    ]
+
+    strategy_names = {"resonance": "MACD多周期共振", "oversold": "超跌反弹", "breakout": "趋势突破"}
+    cfg = summary.get("tracking_config", {})
+    if cfg:
+        ms = cfg.get("min_samples", {})
+        stage = "冷启动" if cfg.get("cold_start") else "正常"
+        lines.append(
+            f"（完成窗口=第{cfg.get('completion_day')}个交易日即计入 completed；"
+            f"优化样本下限：周度{ms.get('weekly')}条/进化{ms.get('evolution')}条；"
+            f"当前为{stage}期）"
+        )
+        lines.append("")
+    for strategy, name in strategy_names.items():
+        stats = summary.get("by_strategy", {}).get(strategy)
+        if not stats:
+            continue
+        lines.append(f"【{name}】")
+        lines.append(f"  样本：{stats['total']}只（完成{stats['completed']}只）")
+        for period, label in [("day1", "1日"), ("day3", "3日"), ("day5", "5日"), ("day10", "10日"), ("day20", "20日")]:
+            s = stats.get(period, {})
+            if s.get("count", 0) > 0:
+                win_emoji = "🟢" if s["win_rate"] >= 50 else "🔴"
+                mae = s.get("avg_mae", 0)
+                mfe = s.get("avg_mfe", 0)
+                eff = s.get("efficiency_ratio", 0)
+                lines.append(
+                    f"  {label}：样本{s['count']}只 | 胜率{win_emoji}{s['win_rate']}% | "
+                    f"平均收益{s['avg_return']}% | 最大{s['max_return']}% | 最小{s['min_return']}%"
+                )
+                lines.append(
+                    f"       MAE最大浮亏{mae}% | MFE最大浮盈{mfe}% | 盈亏效率比{eff}"
+                )
+        lines.append("")
+
+    # 总体
+    overall = summary.get("overall", {})
+    if overall:
+        lines.append("【总体表现】")
+        for period, label in [("day5", "5日"), ("day10", "10日"), ("day20", "20日")]:
+            s = overall.get(period, {})
+            if s.get("count", 0) > 0:
+                mae = s.get("avg_mae", 0)
+                mfe = s.get("avg_mfe", 0)
+                eff = s.get("efficiency_ratio", 0)
+                lines.append(
+                    f"  {label}：胜率{s['win_rate']}% | 平均收益{s['avg_return']}% | "
+                    f"平均最大回撤{s.get('avg_max_drawdown', 0)}%"
+                )
+                lines.append(
+                    f"       MAE最大浮亏{mae}% | MFE最大浮盈{mfe}% | 盈亏效率比{eff}"
+                )
+        lines.append("")
+
+    lines.append("⚠️ 数据基于策略历史推荐自动跟踪，样本较少时仅供参考")
+    lines.append(f"⏱ 生成时间：北京时间{now}")
+    return "\n".join(lines)

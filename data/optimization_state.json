@@ -1,0 +1,24 @@
+{
+  "current_params": {
+    "breakout": {
+      "volume_ratio_min": 1.5,
+      "min_score": 40,
+      "cooldown_days": 10,
+      "trailing_drawdown_pct": 3.0,
+      "trailing_activate_pct": 8.0,
+      "breakeven_activate_pct": 5.0
+    }
+  },
+  "history": [
+    {
+      "timestamp": "2026-09-08 17:18:16",
+      "applied": [],
+      "suggestions_count": 1
+    }
+  ],
+  "last_optimization": {
+    "timestamp": "2026-09-08 17:18:16",
+    "applied": [],
+    "suggestions_count": 1
+  }
+}

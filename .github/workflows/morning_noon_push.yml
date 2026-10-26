@@ -1,0 +1,38 @@
+# -*- coding: utf-8 -*-
+# 盘前报告推送：已停用定时（盘前报告并入 strategy_cloud_deploy.yml 9:15 档，
+# 见 scripts/v43_push.py REPORT_MODE=premarket）。本工作流保留手动触发兜底。
+name: Morning & Noon Report Push
+
+on:
+  workflow_dispatch:
+
+jobs:
+  push_report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install requests pandas numpy akshare
+
+      - name: Run morning/noon push
+        env:
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+        run: python scripts/morning_noon_push.py
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-log-${{ github.run_id }}
+          path: logs/
+          if-no-files-found: warn

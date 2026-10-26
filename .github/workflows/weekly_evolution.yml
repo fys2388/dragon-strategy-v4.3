@@ -1,0 +1,32 @@
+name: 每周策略进化（第4层闭环迭代）
+
+on:
+  schedule:
+    # 每周日 UTC 14:00 = 北京时间 22:00（在绩效报告和参数优化之后运行）
+    - cron: '0 14 * * 0'
+  workflow_dispatch:
+
+jobs:
+  weekly-evolution:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install requests pandas -q
+
+      - name: Run weekly evolution
+        env:
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          PUSH_FEISHU: 'true'
+          IS_CLOUD: 'true'
+        run: |
+          python scripts/weekly_evolution.py

@@ -1,0 +1,39 @@
+# -*- coding: utf-8 -*-
+# V1.0 策略推送：仅手动触发（兜底）。
+# 盘中 5 分钟级定时由 strategy_cloud_deploy.yml 负责（云端部署、推送至飞书），
+# 此工作流保留 workflow_dispatch 作为手动备份，避免与 cloud_deploy 定时重复推送。
+name: V1.0 MACD多周期共振策略推送
+
+on:
+  workflow_dispatch:
+
+jobs:
+  push-report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install requests pandas numpy akshare
+
+      - name: Run MACD resonance push
+        env:
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+        run: python scripts/v43_push.py
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-log-${{ github.run_id }}
+          path: logs/
+          if-no-files-found: warn

@@ -1,0 +1,633 @@
+# -*- coding: utf-8 -*-
+"""主扫描入口模块。
+
+流程：大盘门控 → 标的池初筛 → 硬过滤 → 多周期信号分析 → 去重冷却 → 输出。
+并发控制：ThreadPoolExecutor(max_workers=8) + 单只 0.3s 间隔。
+日志：logs/scanner_YYYYMMDD.log + 控制台双输出。
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import os
+import threading
+import time
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
+from typing import Dict, List, Optional
+
+from . import data_source as ds
+from .config import RISK, SIGNAL, HARD_FILTERS
+from .adaptive_config import get_macd_params, get_risk_params, get_current_regime
+from .filters import pass_hard_filters
+from .market_gate import get_market_score
+from .portfolio_manager import PortfolioManager
+from .trading_calendar import BJT, is_trading_time, is_holiday, now_bjt
+from .signal_engine import SignalEngine, SignalType
+from .data_validator import (ValidationResult, get_data_with_fallback, send_feishu_alert,
+                             update_source_status, validate_stock_pool, get_cached_pool, set_cached_pool)
+from .market_regime import REGIME_LABELS, classify_regime
+
+LOCK = threading.Lock()
+
+# ============================================================
+# 日志
+# ============================================================
+LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "logs")
+HISTORY_FILE = os.path.join(os.path.dirname(LOG_DIR), "data", "strategy_history.jsonl")
+MIN_POOL_SIZE = 100  # 选股池最小数量（正常 A 股 5000+ 只，<1000 视为接口异常）
+
+
+class _BJTFormatter(logging.Formatter):
+    """日志时间使用北京时间显示。"""
+
+    def formatTime(self, record, datefmt=None):
+        dt = now_bjt()
+        return dt.strftime(datefmt or "%Y-%m-%d %H:%M:%S")
+
+
+def _now_naive() -> datetime:
+    """当前北京时间（naive，用于缓存/冷却期比较）。"""
+    return now_bjt().replace(tzinfo=None)
+
+
+def setup_logger() -> logging.Logger:
+    logger = logging.getLogger("scanner")
+    logger.setLevel(logging.INFO)
+    logger.handlers.clear()
+    fmt = _BJTFormatter("%(asctime)s %(levelname)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        fh = logging.FileHandler(os.path.join(LOG_DIR, f"scanner_{now_bjt().strftime('%Y%m%d')}.log"),
+                                 encoding="utf-8")
+        fh.setFormatter(fmt)
+        logger.addHandler(fh)
+    except Exception:
+        pass
+    sh = logging.StreamHandler()
+    sh.setFormatter(fmt)
+    logger.addHandler(sh)
+    return logger
+
+
+LOG = setup_logger()
+
+
+def _write_anomaly_log(line: str):
+    """追加数据异常日志到 logs/data_anomaly.log。"""
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        with open(os.path.join(LOG_DIR, "data_anomaly.log"), "a", encoding="utf-8") as f:
+            f.write(f"{now_bjt().strftime('%Y-%m-%d %H:%M:%S')} | {line}\n")
+    except Exception as e:
+        LOG.warning(f"异常日志写入失败: {e}")
+
+
+class Scanner:
+    """MACD 多周期共振主扫描器。"""
+
+    def __init__(self, engine: Optional[SignalEngine] = None, use_full_market: bool = False):
+        self.engine = engine or SignalEngine()
+        self.base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        self.cache_file = os.path.join(self.base_dir, "data", "signal_cache.json")
+        self.cache = self._load_cache()
+        self.quality_pool = self._load_quality_pool()
+        # 全市场开关：health_monitor Level 3 降级时置 True，
+        # 让 _quick_filter 跳过优质股票池限制（否则降级等于空转）。
+        self.use_full_market = use_full_market
+
+    def _load_quality_pool(self) -> set:
+        pool_file = os.path.join(self.base_dir, "data", "quality_pool.json")
+        try:
+            with open(pool_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            codes = {item["code"] for item in data if "code" in item}
+            LOG.info(f"优质股票池加载成功：{len(codes)}只")
+            return codes
+        except Exception as e:
+            LOG.warning(f"优质股票池加载失败，使用全市场扫描: {e}")
+            return set()
+
+    # ----------------------------------------------------------
+    # 信号去重（冷却期）
+    # ----------------------------------------------------------
+    def _load_cache(self) -> Dict:
+        try:
+            with open(self.cache_file, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {"pushed": {}}
+
+    def _save_cache(self):
+        os.makedirs(os.path.dirname(self.cache_file), exist_ok=True)
+        with open(self.cache_file, "w", encoding="utf-8") as f:
+            json.dump(self.cache, f, ensure_ascii=False, indent=2)
+
+    def _is_in_cooldown(self, code: str) -> bool:
+        last = self.cache.get("pushed", {}).get(code)
+        if not last:
+            return False
+        try:
+            last_ts = datetime.strptime(last, "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            return False
+        hours = (_now_naive() - last_ts).total_seconds() / 3600
+        return hours < SIGNAL["cooldown_hours"]
+
+    def _mark_pushed(self, code: str):
+        self.cache.setdefault("pushed", {})[code] = _now_naive().strftime("%Y-%m-%d %H:%M:%S")
+        self._save_cache()
+
+    # ----------------------------------------------------------
+    # 策略历史记录（供复盘/看板使用）
+    # ----------------------------------------------------------
+    def _append_history(self, result: Dict):
+        """将一次扫描结果追加到 data/strategy_history.jsonl。
+
+        供 scripts/daily_review_push.py、generate_dashboard_data.py、morning_noon_push.py 读取。
+        补记 regime / degradation_level：复盘与看板需要按市场环境和降级档位切片，
+        否则只能看到"推了几只"，看不出"是什么环境下、是否处于降级放宽状态推的"。
+        """
+        record = {
+            "ts": result.get("scan_time") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "strategy": "resonance",
+            "regime": result.get("regime", ""),
+            "market_score": result.get("market_score", 0.0),
+            "can_open": result.get("can_open", False),
+            "degradation_level": result.get("degradation_level", 0),
+            "recommend_count": len(result.get("entries", [])),
+            "summary": result.get("summary", ""),
+            "entries": [
+                {"code": e.get("code"), "name": e.get("name"),
+                 "price": e.get("price"), "score": e.get("score")}
+                for e in result.get("entries", [])
+            ],
+            "exit_signals": [
+                {"code": s.get("code"), "signal_type": s.get("signal_type"),
+                 "profit_pct": s.get("profit_pct"), "suggestion": s.get("suggestion")}
+                for s in result.get("exit_signals", [])
+            ],
+        }
+        try:
+            os.makedirs(os.path.dirname(HISTORY_FILE), exist_ok=True)
+            with open(HISTORY_FILE, "a", encoding="utf-8") as f:
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        except Exception as e:
+            LOG.warning(f"策略历史记录写入失败: {e}")
+
+    # ----------------------------------------------------------
+    # 快速初筛（价格/市值/名称，不拉K线）
+    # ----------------------------------------------------------
+    def _fetch_pool_with_retry(self, max_stocks: int,
+                               min_size: int = MIN_POOL_SIZE,
+                               retries: int = 2, gap: float = 2.0) -> List[Dict]:
+        """获取选股池，不足 min_size 只时重试 retries 次（间隔 gap 秒）。"""
+        # 当日缓存优先：避免多次扫描重复请求接口（大盘数据同理由 data_validator 处理）
+        try:
+            cached = get_cached_pool()
+            if cached and len(cached) >= min_size:
+                LOG.info(f"选股池使用当日缓存：{len(cached)} 只")
+                return cached[:max_stocks]
+        except Exception as e:
+            LOG.warning(f"选股池缓存读取失败: {e}")
+        stocks: List[Dict] = []
+        for attempt in range(retries + 1):
+            stocks = ds.get_mainboard_stocks(limit=max_stocks)
+            if len(stocks) >= min_size:
+                try:
+                    set_cached_pool(stocks)
+                except Exception as e:
+                    LOG.warning(f"选股池缓存写入失败: {e}")
+                return stocks
+            LOG.warning(f"选股池异常: 仅 {len(stocks)} 只 < {min_size}（第 {attempt + 1}/{retries + 1} 次）")
+            if attempt < retries:
+                time.sleep(gap)
+        return stocks
+
+    def _quick_filter(self, stock: dict) -> bool:
+        name = str(stock.get("name", ""))
+        if "ST" in name.upper() or "退" in name:
+            return False
+        # 优质股票池过滤（基本面预筛选）；Level 3 降级时退回全市场
+        code = str(stock.get("code", ""))
+        if self.quality_pool and not self.use_full_market and code not in self.quality_pool:
+            return False
+        price = float(stock.get("price", 0) or 0)
+        cap = float(stock.get("float_cap_yi", 0) or 0)
+        if price < 3.0 or price > 35.0:
+            return False
+        if cap < 30 or cap > 600:
+            return False
+        # 成交额预过滤（用池内当日成交额作 20 日均额的宽松代理）：
+        # 当日成交额过低者基本不可能满足 amount_20d≥0.8亿 硬过滤，提前剔除，
+        # 大幅减少后续逐票拉 K 线的耗时（云端 5 分钟节奏必需）。
+        amt = float(stock.get("amount_yi", 0) or 0)
+        if amt > 0 and amt < 0.5:  # 仅当日已有成交额且 <5000万 时剔除
+            return False
+        return True
+
+    def _enrich_hard_metrics(self, stock: dict) -> dict:
+        """补充 20 日均额与振幅，供硬过滤使用。"""
+        df = ds.get_kline_daily(stock["code"], count=25)
+        if df.empty or len(df) < 20:
+            stock["amount_20d_wan"] = 0.0
+            stock["amplitude_20d_pct"] = 0.0
+            return stock
+        closes = df["close"].astype(float)
+        highs = df["high"].astype(float)
+        lows = df["low"].astype(float)
+        amounts = df["amount"].astype(float)
+        stock["amount_20d_wan"] = float(amounts.iloc[-20:].mean()) / 10000.0
+        base = float(closes.iloc[-21]) if len(closes) >= 21 else float(closes.iloc[0])
+        if base > 0:
+            stock["amplitude_20d_pct"] = (float(highs.iloc[-20:].max()) - float(lows.iloc[-20:].min())) / base * 100.0
+        else:
+            stock["amplitude_20d_pct"] = 0.0
+        return stock
+
+    # ----------------------------------------------------------
+    # 主扫描
+    # ----------------------------------------------------------
+    def run(self, max_stocks: int = 2000, need_push: bool = False,
+            source: str = "auto", param_override: Optional[Dict] = None) -> Dict:
+        """执行扫描。
+
+        Args:
+            max_stocks: 标的池上限
+            need_push: 是否标记已推送（进入冷却期）
+            source: 数据源选择 auto/eastmoney/akshare/sina
+            param_override: health_monitor.get_current_params_override() 的返回值。
+                传入后其中的 ``macd`` 覆盖会合并进 adaptive_params、
+                ``general.use_full_market`` 会打开全市场扫描。
+                之前该覆盖只在 v43_push.py 里 print 出来、从未真正作用于扫描，
+                是 Agent 闭环里最典型的一段"假闭环"。
+        """
+        result = {
+            "scan_time": now_bjt().strftime("%Y-%m-%d %H:%M:%S"),
+            "market_score": 0.0,
+            "market_desc": "",
+            "can_open": False,
+            "entries": [],
+            "avoids": 0,
+            "errors": [],
+            "summary": "",
+            "diagnosis": "",
+            "exit_signals": [],
+            "scan_elapsed": 0.0,
+            "limit_up": 0,
+            "limit_down": 0,
+            "scanned_count": 0,
+            "passed_count": 0,
+            "resonance_count": 0,
+            "recommend_count": 0,
+            "data_source": "eastmoney",
+            "validation_state": "ok",
+            "validation_anomalies": [],
+            "regime": "sideways",   # 未取到数据时的默认档，须与 market_regime.REGIME_LABELS 口径一致
+            "data_error": False,
+        }
+        t0 = time.time()
+
+        # 0. 持仓离场信号（无论门控是否通过都执行）
+        try:
+            pm = PortfolioManager()
+            exit_signals = pm.check_exit_signals()
+            if exit_signals:
+                result["exit_signals"] = [s.__dict__ for s in exit_signals]
+                LOG.info(f"持仓离场信号 {len(exit_signals)} 条："
+                         + "; ".join(f"{s.code} {s.signal_type}" for s in exit_signals))
+        except Exception as e:
+            LOG.warning(f"持仓离场检查异常: {e}")
+
+        # 0.5 数据自驱层：三源降级（东财 → AkShare → 新浪）+ 熔断
+        chosen_md = None
+        if source in ("eastmoney", "akshare", "sina"):
+            from .data_validator import get_data_eastmoney, get_data_akshare, get_data_sina
+            fn_map = {"eastmoney": get_data_eastmoney, "akshare": get_data_akshare, "sina": get_data_sina}
+            forced = fn_map[source]()
+            update_source_status(source, forced is not None)
+            if forced is None:
+                result["data_error"] = True
+                result["summary"] = f"强制数据源 {source} 不可用，跳过本次扫描"
+                result["scan_elapsed"] = round(time.time() - t0, 1)
+                msg = f"指定数据源 {source} 不可用，已跳过本次扫描。"
+                LOG.error(msg)
+                _write_anomaly_log(msg)
+                send_feishu_alert(msg, "数据源不可用")
+                self._append_history(result)
+                return result
+            chosen_md = forced
+            result["data_source"] = source
+            result["validation_state"] = "ok"
+            LOG.info(f"强制数据源 {source} 可用，指数={chosen_md.index_price:.2f}")
+        else:
+            chosen_md, chosen_src = get_data_with_fallback()
+            update_source_status("eastmoney", chosen_src == "eastmoney")
+            update_source_status("akshare", chosen_src == "akshare")
+            update_source_status("sina", chosen_src == "sina")
+            result["data_source"] = chosen_src
+            result["validation_state"] = "ok" if chosen_src == "eastmoney" else "switched"
+            if chosen_src == "none":
+                result["data_error"] = True
+                result["summary"] = "数据异常，策略暂停"
+                result["scan_elapsed"] = round(time.time() - t0, 1)
+                msg = "东财/AkShare/新浪三源均不可用，今日策略暂停执行，请检查网络或数据源。"
+                LOG.error(msg)
+                _write_anomaly_log(msg)
+                send_feishu_alert(msg, "数据异常，策略暂停")
+                self._append_history(result)
+                return result
+            if chosen_src != "eastmoney":
+                LOG.warning(f"主源(东财)不可用，自动切换 {chosen_src}")
+                _write_anomaly_log(f"data_validate | 主源不可用，切换 {chosen_src}")
+                send_feishu_alert(f"主源(东财)不可用，已自动切换至 {chosen_src} 数据源")
+
+        # 熔断：数据有效性前置校验（指数为0 / 交易时段涨跌停均为0）
+        if chosen_md is not None:
+            if chosen_md.index_price <= 0:
+                result["data_error"] = True
+                msg = "行情数据异常：指数价格为0，本次扫描暂停。"
+                LOG.error(msg)
+                _write_anomaly_log(f"circuit_break | {msg}")
+                send_feishu_alert(msg, "行情数据异常")
+                result["summary"] = msg
+                result["scan_elapsed"] = round(time.time() - t0, 1)
+                self._append_history(result)
+                return result
+            if is_trading_time() and chosen_md.limit_up_count == 0 and chosen_md.limit_down_count == 0:
+                result["data_error"] = True
+                msg = "行情数据异常：交易时段内涨跌停数为0，疑似接口故障，本次扫描暂停。"
+                LOG.error(msg)
+                _write_anomaly_log(f"circuit_break | {msg}")
+                send_feishu_alert(msg, "行情数据异常")
+                result["summary"] = msg
+                result["scan_elapsed"] = round(time.time() - t0, 1)
+                self._append_history(result)
+                return result
+
+        result["limit_up"] = int(chosen_md.limit_up_count)
+        result["limit_down"] = int(chosen_md.limit_down_count)
+        result["regime"] = classify_regime(chosen_md)
+        LOG.info(f"涨跌停家数：涨停{result['limit_up']}家 / 跌停{result['limit_down']}家 | "
+                 f"数据源={result['data_source']} | 市场环境={result['regime']}")
+
+        # 1. 大盘门控（使用选中源的同一快照）
+        score, desc, can_open = get_market_score(market_data=chosen_md)
+        result["market_score"] = score
+        result["market_desc"] = desc
+        result["can_open"] = can_open
+        LOG.info(f"大盘评分 {score:.1f}/7，门控{'通过' if can_open else '未通过'}")
+
+        # 1.5 自适应：获取当前市场环境和动态参数
+        regime = get_current_regime(chosen_md)
+        adaptive_params = get_macd_params(regime)
+        risk_params = get_risk_params(regime)
+
+        # 1.6 健康度降级覆盖：真正生效（原先只在 v43_push.py 打印，从未作用于扫描）
+        if param_override:
+            from .health_monitor import HealthMonitor
+            adaptive_params = HealthMonitor.merge_override(adaptive_params, "macd", param_override)
+            self.use_full_market = bool(
+                param_override.get("general", {}).get("use_full_market", False)
+            )
+        result["degradation_level"] = int(param_override.get("level", 0)) if param_override else 0
+        if param_override and result["degradation_level"] > 0:
+            result["health_override"] = param_override
+            LOG.warning(f"[健康度降级] Level {result['degradation_level']}："
+                        f"{param_override.get('general', {}).get('note', '')}"
+                        f" | 全市场={self.use_full_market} | "
+                        f"共振门槛={adaptive_params.get('min_score')}")
+
+        result["regime"] = regime
+        result["regime_label"] = REGIME_LABELS.get(regime, "未知")
+        result["adaptive_params"] = adaptive_params
+        result["risk_params"] = risk_params
+        LOG.info(f"[自适应] 市场环境={regime}({result['regime_label']}) "
+                 f"参数={adaptive_params['name']} "
+                 f"振幅上限={adaptive_params.get('amplitude_20d_max', 40)}% "
+                 f"最低得分={adaptive_params.get('min_score', 2.0)}")
+
+        # 1.7 健康度降级覆盖大盘门控短路
+        # 原逻辑：大盘<3分 → 直接不扫描 → 降级只能放宽"扫描后过滤"，
+        # 对"不扫描"完全无效 → 连续14天0推荐但降级到Level 3仍无推荐。
+        # 修复：Level 2+ 降低门控短路阈值，允许"宽松档"扫描。
+        #   Level 2：大盘≥2分 允许扫描
+        #   Level 3：大盘≥1分 允许扫描（0分=系统性风险熔断，仍不放行）
+        degradation_level = result.get("degradation_level", 0)
+        if not can_open and degradation_level >= 2:
+            relaxed_gate = 1.0 if degradation_level >= 3 else 2.0
+            if score >= relaxed_gate:
+                can_open = True
+                result["can_open"] = can_open
+                LOG.warning(f"[健康度降级] Level {degradation_level}：大盘{score:.1f}分≥{relaxed_gate:.0f}，"
+                            f"允许宽松档扫描（原门控<3分短路已覆盖）")
+
+        if not can_open:
+            result["summary"] = f"大盘评分 {score:.1f} 分 < 4，仅允许平仓/空仓，禁止新开多。"
+            LOG.info(result["summary"])
+            result["scan_elapsed"] = round(time.time() - t0, 1)
+            self._append_history(result)
+            return result
+
+        # 2. 标的池 + 初筛（空池保护：<100 只重试 2 次，仍失败推送告警并跳过）
+        all_stocks = self._fetch_pool_with_retry(max_stocks)
+        if len(all_stocks) < MIN_POOL_SIZE:
+            result["summary"] = "选股池数据异常，已跳过本次扫描"
+            LOG.error(f"{result['summary']}（仅 {len(all_stocks)} 只）")
+            _write_anomaly_log(f"stock_pool | 选股池仅 {len(all_stocks)} 只 < {MIN_POOL_SIZE}")
+            send_feishu_alert(
+                f"选股池数据异常：获取 {len(all_stocks)} 只（< {MIN_POOL_SIZE}），已跳过本次扫描。",
+                "选股池数据异常")
+            result["scan_elapsed"] = round(time.time() - t0, 1)
+            self._append_history(result)
+            return result
+
+        # 池质量校验（f20/f2 字段完整性）
+        pv = validate_stock_pool(all_stocks)
+        result["pool_validation"] = pv.severity
+        if pv.severity == "critical":
+            detail = "; ".join(pv.anomalies)
+            LOG.error(f"选股池校验失败: {detail}")
+            _write_anomaly_log(f"stock_pool | {detail}")
+            send_feishu_alert(f"选股池数据异常：{detail}，已跳过本次扫描。", "选股池数据异常")
+            result["summary"] = "选股池数据异常，已跳过本次扫描"
+            result["scan_elapsed"] = round(time.time() - t0, 1)
+            self._append_history(result)
+            return result
+        candidates = [s for s in all_stocks if self._quick_filter(s)]
+        LOG.info(f"标的池 {len(all_stocks)} 只（校验:{pv.severity}）→ 初筛 {len(candidates)} 只")
+
+        # 3. 硬过滤（并发补齐 20 日均额/振幅，使用动态振幅上限）
+        with ThreadPoolExecutor(max_workers=12) as pool:
+            enriched = list(pool.map(self._enrich_hard_metrics, candidates))
+        passed = []
+        reject_reasons = Counter()
+        amp_max = adaptive_params.get("amplitude_20d_max", HARD_FILTERS["amplitude_20d_max"])
+        for s in enriched:
+            ok, reason = pass_hard_filters(s, amplitude_max=amp_max)
+            if ok:
+                passed.append(s)
+            else:
+                reject_reasons[reason] += 1
+        LOG.info(f"硬过滤通过 {len(passed)} 只，拒绝 {len(enriched) - len(passed)} 只")
+        if len(passed) == 0:
+            LOG.warning(f"⚠️ 硬过滤后剩 0 只（初筛{len(candidates)}只全部被拒），"
+                        f"可能原因：市场极度弱势/数据源异常/过滤条件过严")
+            LOG.warning(f"   拒绝原因统计：{dict(reject_reasons.most_common())}")
+            # 标记数据异常：硬过滤0只可能是数据源返回了错误数据（price=0/cap=0）
+            result["data_anomaly"] = True
+            result["anomaly_reason"] = f"硬过滤0只（初筛{len(candidates)}只全部被拒）"
+            result["anomaly_details"] = dict(reject_reasons.most_common(5))
+        top_rejects = [r for r, _ in reject_reasons.most_common(3)]
+
+        # 4. 多周期信号分析（并发 + 0.3s 间隔限速）
+        # 海外IP拉K线慢，硬过滤后按成交额降序只取前200只，避免8分钟超时
+        passed_sorted = sorted(passed, key=lambda s: float(s.get("amount_yi", 0) or 0), reverse=True)
+        analyze_pool = passed_sorted[:200]
+        LOG.info(f"多周期分析标的：硬过滤{len(passed)}只 → 按成交额取前{len(analyze_pool)}只")
+        entries: List[Dict] = []
+        avoid_count = 0
+        tf_stats = Counter()
+        delay = threading.Event()
+        # 清空上一轮的闸门计数，本轮重新统计
+        self.engine.reset_gate_counts()
+
+        def analyze(stock: dict):
+            delay.wait(0.3)
+            return self.engine.analyze_stock(stock["code"], stock["name"], stock["price"])
+
+        with ThreadPoolExecutor(max_workers=12) as pool:
+            futs = [pool.submit(analyze, s) for s in analyze_pool]
+            for fut in as_completed(futs):
+                try:
+                    sig = fut.result()
+                except Exception as e:
+                    result["errors"].append(f"analyze error: {e}")
+                    continue
+                if sig.tf_status:
+                    if sig.tf_status.get("daily_above_zero"):
+                        tf_stats["日线零轴上方"] += 1
+                    if sig.tf_status.get("tf60_golden"):
+                        tf_stats["60min金叉"] += 1
+                    if sig.tf_status.get("tf30_golden"):
+                        tf_stats["30min金叉"] += 1
+                    if sig.tf_status.get("tf15_cross_zero"):
+                        tf_stats["15min上穿零轴"] += 1
+                if sig.signal_type == SignalType.LONG_ENTRY:
+                    entries.append(sig.__dict__)
+                elif sig.signal_type == SignalType.AVOID:
+                    avoid_count += 1
+
+        tf_desc = " | ".join(f"{k}{v}只" for k, v in tf_stats.most_common())
+        LOG.info(f"周期信号统计：{tf_desc or '无'}")
+        # 逐道闸门拒绝计数：0 推荐时直接指出是哪一道闸门把候选拒光了，
+        # 不用再靠猜（之前只有一行「共振信号 0 只」，定位全靠翻代码）。
+        gate_counts = self.engine.get_gate_counts()
+        if gate_counts:
+            gate_desc = " | ".join(f"{k}={v}" for k, v in
+                                   sorted(gate_counts.items(), key=lambda kv: -kv[1]))
+            LOG.info(f"共振闸门拒绝明细：{gate_desc}")
+        else:
+            LOG.info(f"共振闸门拒绝明细：无（所有候选都过完闸门）")
+        LOG.info(f"共振信号 {len(entries)} 只，空头规避 {avoid_count} 只")
+
+        # 5. 共振强度排序，按动态最低得分过滤，取前N
+        min_score = adaptive_params.get("min_score", 0)
+        max_recs = adaptive_params.get("max_recommendations", 5)
+        entries = [e for e in entries if e.get("score", 0) >= min_score]
+        entries.sort(key=lambda x: x.get("score", 0), reverse=True)
+        top = entries[:max_recs]
+
+        # 6. 去重冷却
+        final = []
+        for e in top:
+            if not self._is_in_cooldown(e["code"]):
+                final.append(e)
+                if need_push:
+                    self._mark_pushed(e["code"])
+
+        result["entries"] = final
+        result["avoids"] = avoid_count
+        result["scanned_count"] = len(all_stocks)
+        result["passed_count"] = len(passed)
+        result["resonance_count"] = len(entries)
+        result["recommend_count"] = len(final)
+        result["gate_counts"] = gate_counts
+        result["summary"] = f"初筛 {len(all_stocks)} → {len(candidates)} 只 → 硬过滤 {len(passed)} 只 → 共振信号 {len(entries)} 只 → 推荐 {len(final)} 只"
+        top_gates = sorted(gate_counts.items(), key=lambda kv: -kv[1])[:3]
+        gate_hint = "、".join(f"{k}{v}只" for k, v in top_gates) if top_gates else "无"
+        result["diagnosis"] = (
+            f"扫描{len(all_stocks)}只 → 过滤后{len(passed)}只 → 共振通过{len(entries)}只"
+            f" | 主要拒因：{gate_hint if top_gates else ('、'.join(top_rejects) if top_rejects else '无')}"
+        )
+        LOG.info(result["summary"])
+        result["scan_elapsed"] = round(time.time() - t0, 1)
+        self._append_history(result)
+        return result
+
+
+def build_message(result: Dict) -> str:
+    """将扫描结果格式化为飞书消息（极简版）。"""
+    score = result.get("market_score", 0.0)
+    can_open = result.get("can_open", False)
+    entries = result.get("entries", [])
+
+    lines = [f"📊 MACD共振：大盘{score:.0f}/7 {'🔴可开仓' if can_open and score >= 4 else '🟡谨慎开仓' if can_open else '🟢观望'}"]
+    if entries:
+        for i, e in enumerate(entries, 1):
+            levels = "+".join(e.get("resonance_levels", []))
+            lines.append(f"  {i}. {e['name']}({e['code']}) {e['price']}元 {levels} 得分{e['score']}")
+    else:
+        # 0 推荐时给出拒因：以前只写「无推荐」，看不出是哪道闸门把候选拒光了
+        gate_counts = result.get("gate_counts") or {}
+        if gate_counts:
+            top = sorted(gate_counts.items(), key=lambda kv: -kv[1])[:3]
+            gate_hint = "、".join(f"{k}{v}只" for k, v in top)
+            lines.append(f"  无推荐｜硬过滤后{result.get('passed_count', 0)}只全部被拒：{gate_hint}")
+        else:
+            lines.append(f"  无推荐｜硬过滤后仅剩{result.get('passed_count', 0)}只")
+    return "\n".join(lines)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="MACD 多周期共振策略扫描器")
+    parser.add_argument("--push", action="store_true", help="推送模式：标记已推送（冷却）")
+    parser.add_argument("--max", type=int, default=2000, help="扫描股票上限")
+    parser.add_argument("--source", choices=["auto", "eastmoney", "akshare", "sina"], default="auto",
+                        help="数据源选择：auto自动(默认)/eastmoney强制主源/akshare备1/sina备2")
+    args = parser.parse_args()
+
+    # 交易时段窗口：盘前 9:15-9:30 + 盘中 9:30-11:30/13:00-15:00。
+    # 本机任务计划程序/云端 cron 均在窗口内触发；TEST_MODE=true 可跳过（手动排查用）。
+    if os.environ.get("TEST_MODE", "").lower() != "true":
+        now = now_bjt()
+        hm = now.hour * 100 + now.minute
+        in_window = (not is_holiday(now)) and (915 <= hm < 930 or is_trading_time(now))
+        if not in_window:
+            print(f"📌 非交易时段（北京时间 {now.strftime('%Y-%m-%d %H:%M:%S')}），跳过扫描。"
+                  f"如需强制运行请设置 TEST_MODE=true")
+            return
+
+    scanner = Scanner()
+    result = scanner.run(max_stocks=args.max, need_push=args.push, source=args.source)
+    msg = build_message(result)
+    print(msg)
+    print("\n[SUMMARY]", result["summary"])
+
+    if args.push:
+        webhook = os.environ.get("FEISHU_WEBHOOK_URL", "")
+        if webhook:
+            import requests
+            try:
+                resp = requests.post(webhook, json={"msg_type": "text", "content": {"text": msg}}, timeout=8)
+                print(f"[PUSH] 飞书推送完成 HTTP {resp.status_code}")
+            except Exception as e:
+                print(f"[PUSH] 飞书推送失败: {e}")
+        else:
+            print("[PUSH] 未配置 FEISHU_WEBHOOK_URL，跳过推送")
+
+
+if __name__ == "__main__":
+    main()
