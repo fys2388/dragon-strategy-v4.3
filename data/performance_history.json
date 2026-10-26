@@ -1,0 +1,67 @@
+{
+  "created_at": "2026-10-26 11:16:29",
+  "daily_records": [
+    {
+      "date": "2026-10-26",
+      "total_equity": 500000,
+      "total_positions": 0,
+      "total_cost": 0,
+      "total_pnl": 0,
+      "total_pnl_pct": 0,
+      "market_gate_level": "weak",
+      "market_gate_score": 3.55,
+      "new_signals_count": 1,
+      "closed_trades_count": 0,
+      "holdings": [],
+      "recorded_at": "2026-10-26 11:31:12"
+    }
+  ],
+  "trades": [],
+  "signals": [
+    {
+      "date": "2026-10-26",
+      "code": "002270",
+      "name": "华明装备",
+      "signal_type": "weak_breakout",
+      "entry_price": 19.45,
+      "score": 55.2
+    },
+    {
+      "date": "2026-10-26",
+      "code": "301002",
+      "name": "崧盛股份",
+      "signal_type": "watchlist",
+      "entry_price": 29.06,
+      "score": 37.2
+    },
+    {
+      "date": "2026-10-26",
+      "code": "301002",
+      "name": "崧盛股份",
+      "signal_type": "watchlist",
+      "entry_price": 29.32,
+      "score": 37.2
+    }
+  ],
+  "metrics": {
+    "updated_at": "2026-10-26 11:31:12",
+    "initial_equity": 500000,
+    "current_equity": 500000,
+    "total_return_pct": 0.0,
+    "annualized_return_pct": 0.0,
+    "max_drawdown_pct": 0,
+    "current_drawdown_pct": 0.0,
+    "sharpe_ratio": 0,
+    "sortino_ratio": 0,
+    "calmar_ratio": 0,
+    "total_trades": 0,
+    "wins": 0,
+    "losses": 0,
+    "win_rate_pct": 0,
+    "avg_win_pct": 0,
+    "avg_loss_pct": 0,
+    "profit_loss_ratio": 0,
+    "trading_days": 1
+  },
+  "decay_log": []
+}

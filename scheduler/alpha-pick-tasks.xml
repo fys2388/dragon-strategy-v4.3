@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  alpha-pick Windows 定时任务配置
+  
+  使用方法：
+  1. 将此文件保存为 alpha-pick-tasks.xml
+  2. 以管理员身份运行：schtasks /Create /F /XML alpha-pick-tasks.xml
+  3. 或手动在任务计划程序中导入
+
+  包含3个定时任务：
+  - alpha_pick_premarket: 盘前选股（09:00）
+  - alpha_pick_alerts: 盘中预警（每5分钟 09:30-15:00）
+  - alpha_pick_review: 盘后复盘（15:30）
+-->
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Date>2026-10-26T00:00:00</Date>
+    <Author>alpha-pick</Author>
+    <Description>alpha-pick 选股系统定时任务</Description>
+    <URI>\alpha_pick_tasks</URI>
+  </RegistrationInfo>
+  
+  <Triggers>
+    <!-- 盘前选股: 每周一至周五 09:00 -->
+    <CalendarTrigger>
+      <StartBoundary>2026-10-26T09:00:00</StartBoundary>
+      <Enabled>true</Enabled>
+      <ScheduleByDay>
+        <DaysOfWeek>
+          <Monday/>
+          <Tuesday/>
+          <Wednesday/>
+          <Thursday/>
+          <Friday/>
+        </DaysOfWeek>
+      </ScheduleByDay>
+      <Repetition>
+        <Interval>PT1H</Interval>
+        <Duration>PT0S</Duration>
+      </Repetition>
+    </CalendarTrigger>
+    
+    <!-- 盘中预警: 每5分钟 09:30-15:00 -->
+    <CalendarTrigger>
+      <StartBoundary>2026-10-26T09:30:00</StartBoundary>
+      <Enabled>true</Enabled>
+      <ScheduleByDay>
+        <DaysOfWeek>
+          <Monday/>
+          <Tuesday/>
+          <Wednesday/>
+          <Thursday/>
+          <Friday/>
+        </DaysOfWeek>
+      </ScheduleByDay>
+      <Repetition>
+        <Interval>PT5M</Interval>
+        <Duration>PT5H30M</Duration>
+      </Repetition>
+    </CalendarTrigger>
+    
+    <!-- 盘后复盘: 每周一至周五 15:30 -->
+    <CalendarTrigger>
+      <StartBoundary>2026-10-26T15:30:00</StartBoundary>
+      <Enabled>true</Enabled>
+      <ScheduleByDay>
+        <DaysOfWeek>
+          <Monday/>
+          <Tuesday/>
+          <Wednesday/>
+          <Thursday/>
+          <Friday/>
+        </DaysOfWeek>
+      </ScheduleByDay>
+    </CalendarTrigger>
+  </Triggers>
+  
+  <Principals>
+    <Principal id="Author">
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>false</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <IdleSettings>
+      <StopOnIdleEnd>false</StopOnIdleEnd>
+      <RestartOnIdle>false</RestartOnIdle>
+    </IdleSettings>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <WakeToRun>false</WakeToRun>
+    <ExecutionTimeLimit>PT1H</ExecutionTimeLimit>
+    <Priority>7</Priority>
+  </Settings>
+  
+  <Actions Context="Author">
+    <!-- 盘前选股 -->
+    <Exec>
+      <Command>python</Command>
+      <Arguments>cli.py scan</Arguments>
+      <WorkingDirectory>E:\AI\策略\alpha-pick</WorkingDirectory>
+    </Exec>
+    
+    <!-- 盘中预警 -->
+    <Exec>
+      <Command>python</Command>
+      <Arguments>cli.py alert</Arguments>
+      <WorkingDirectory>E:\AI\策略\alpha-pick</WorkingDirectory>
+    </Exec>
+    
+    <!-- 盘后复盘 -->
+    <Exec>
+      <Command>python</Command>
+      <Arguments>cli.py review</Arguments>
+      <WorkingDirectory>E:\AI\策略\alpha-pick</WorkingDirectory>
+    </Exec>
+  </Actions>
+</Task>

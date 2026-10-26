@@ -1,0 +1,122 @@
+{
+  "date": "2026-10-26",
+  "timestamp": "2026-10-26T11:29:09.152861",
+  "steps": {
+    "market_gate": "ok",
+    "universe": "ok",
+    "signals": "ok",
+    "position": "ok"
+  },
+  "errors": [],
+  "market_gate": {
+    "score": 3.55,
+    "level": "weak",
+    "max_position_pct": 0.3,
+    "max_position_desc": "建议最大仓位 30%",
+    "indicators": {
+      "benchmark_trend": {
+        "score": 0.0,
+        "weight": 0.3,
+        "desc": "基准指数在60日线上方且60日线向上"
+      },
+      "volume_situation": {
+        "score": 0.4,
+        "weight": 0.25,
+        "desc": "市场成交额放大"
+      },
+      "breadth": {
+        "score": 0.4,
+        "weight": 0.2,
+        "desc": "上涨家数占比>50%"
+      },
+      "northbound_flow": {
+        "score": 0.7,
+        "weight": 0.15,
+        "desc": "北向资金净流入"
+      },
+      "sentiment": {
+        "score": 0.7,
+        "weight": 0.1,
+        "desc": "涨停家数>跌停家数"
+      }
+    },
+    "summary": "大盘环境：偏弱（3.5分），建议仓位≤30%"
+  },
+  "candidate_count": 1,
+  "signals": [
+    {
+      "code": "301002",
+      "name": "崧盛股份",
+      "signal_type": "watchlist",
+      "signal_desc": "观察池（综合评分较高）",
+      "signal_strength": "watch",
+      "entry_price": 29.32,
+      "stop_loss": 27.27,
+      "target_1": 33.72,
+      "target_2": 36.65,
+      "score": 37.2,
+      "reason": "综合评分62，暂无明确买点，列入观察",
+      "position_plan": {
+        "code": "301002",
+        "name": "崧盛股份",
+        "entry_price": 29.32,
+        "stop_loss": 27.27,
+        "total_amount": 99688.0,
+        "buy_shares": 3400,
+        "batch_plan": {
+          "batch_1": {
+            "shares": 1360,
+            "amount": 39875.2,
+            "desc": "试探建仓"
+          },
+          "batch_2": {
+            "shares": 1190,
+            "amount": 34890.8,
+            "desc": "确认加仓"
+          },
+          "batch_3": {
+            "shares": 850,
+            "amount": 24922.0,
+            "desc": "趋势加仓"
+          }
+        },
+        "risk_pct": 6.99,
+        "position_pct": 19.94,
+        "current_positions": 0,
+        "can_add": true
+      }
+    }
+  ],
+  "positions": [
+    {
+      "code": "301002",
+      "name": "崧盛股份",
+      "entry_price": 29.32,
+      "stop_loss": 27.27,
+      "total_amount": 99688.0,
+      "buy_shares": 3400,
+      "batch_plan": {
+        "batch_1": {
+          "shares": 1360,
+          "amount": 39875.2,
+          "desc": "试探建仓"
+        },
+        "batch_2": {
+          "shares": 1190,
+          "amount": 34890.8,
+          "desc": "确认加仓"
+        },
+        "batch_3": {
+          "shares": 850,
+          "amount": 24922.0,
+          "desc": "趋势加仓"
+        }
+      },
+      "risk_pct": 6.99,
+      "position_pct": 19.94,
+      "current_positions": 0,
+      "can_add": true
+    }
+  ],
+  "summary": "🏛️ 大盘：大盘环境：偏弱（3.5分），建议仓位≤30%\n📊 推荐：1 只\n🏆 首选：崧盛股份 (301002) - 观察池（综合评分较高），评分37"
+}

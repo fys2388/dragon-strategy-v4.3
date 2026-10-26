@@ -1,0 +1,16 @@
+{
+  "enabled": true,
+  "webhook_url": "",
+  "_comment": "填入飞书自定义机器人 webhook 地址，或设置环境变量 FEISHU_WEBHOOK_URL",
+  "message_templates": {
+    "premarket": "📊【{date} 中线波段选股推荐】",
+    "alert": "🚨【盘中异动预警】",
+    "review": "📋【{date} 盘后复盘】",
+    "weekly": "📈【周度策略回顾】"
+  },
+  "schedule": {
+    "premarket": "09:00",
+    "alert_interval_min": 5,
+    "review": "15:30"
+  }
+}

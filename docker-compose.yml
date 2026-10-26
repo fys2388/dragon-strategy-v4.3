@@ -1,0 +1,52 @@
+# alpha-pick Docker Compose 配置
+# 用于云端部署（阿里云/腾讯云/任何Docker环境）
+
+version: '3.8'
+
+services:
+  # 主服务容器
+  alpha-pick:
+    build: .
+    container_name: alpha-pick
+    restart: unless-stopped
+    volumes:
+      # 持久化数据
+      - ./data:/app/data
+      - ./reports:/app/reports
+      - ./config:/app/config
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TZ=Asia/Shanghai
+      # 飞书Webhook（取消注释并填写）
+      # - FEISHU_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/xxxxx
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "python", "cli.py", "health"]
+      interval: 6h
+      timeout: 30s
+      retries: 3
+      start_period: 60s
+
+  # 可选：健康检查定时任务（每6小时）
+  healthcheck-cron:
+    image: alpine/cron:3.0.3
+    container_name: alpha-pick-healthcheck
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data
+      - ./reports:/app/reports
+      - ./config:/app/config
+    environment:
+      - CRON_SCHEDULE="0 */6 * * * cd /app && python cli.py health 2>&1 | tee -a /app/data/logs/healthcheck.log"
+    depends_on:
+      - alpha-pick
+    profiles:
+      - cron
+
+networks:
+  default:
+    name: alpha-pick-network
