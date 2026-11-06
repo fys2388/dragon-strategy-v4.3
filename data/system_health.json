@@ -33,9 +33,10 @@
     "2026-11-02": 0,
     "2026-11-03": 0,
     "2026-11-04": 0,
-    "2026-11-05": 0
+    "2026-11-05": 0,
+    "2026-11-06": 0
   },
-  "consecutive_zero_days": 28,
+  "consecutive_zero_days": 29,
   "degradation_level": 3,
   "last_recommendation_date": "2026-09-25",
   "degradation_history": [
@@ -59,5 +60,5 @@
     }
   ],
   "recovery_history": [],
-  "updated_at": "2026-11-05 15:00:09"
+  "updated_at": "2026-11-06 10:02:51"
 }
