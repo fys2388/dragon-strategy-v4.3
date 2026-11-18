@@ -153,6 +153,23 @@ class AIPredictor:
         feature_importance = dict(zip(X.columns.tolist(), importance.tolist()))
         top_features = sorted(feature_importance.items(), key=lambda x: x[1], reverse=True)[:10]
 
+        # ── 质量门禁：AUC < MIN_AUC 说明模型在做反向预测，坚决不入库 ──
+        MIN_AUC = 0.55
+        if auc < MIN_AUC:
+            print(f"[AI模型] ⚠️ AUC={auc:.4f} < {MIN_AUC}，模型质量不合格，不保存！"
+                  f"\n   当前样本：{len(X)}条 正/负={int(y.sum())}/{int(len(y)-y.sum())}")
+            # 同时删除旧模型和元数据（避免下次从元数据读到低质量指标）
+            for _f in [MODEL_FILE, MODEL_META_FILE]:
+                try:
+                    os.remove(_f)
+                    print(f"[AI模型] 已删除旧文件：{_f}")
+                except FileNotFoundError:
+                    pass
+            self.meta = {}
+            return {"status": "rejected",
+                    "reason": f"AUC={auc:.4f}低于阈值{MIN_AUC}，模型无效",
+                    "auc": round(auc, 4), "accuracy": round(accuracy, 2)}
+
         # 保存模型
         import pickle
         with open(MODEL_FILE, "wb") as f:

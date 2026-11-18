@@ -241,6 +241,7 @@ class HealthMonitor:
         if level >= 1:
             overrides["macd"]["min_score"] = 1.5
             overrides["macd"]["max_recommendations"] = 6
+            overrides["general"]["ai_min_probability"] = 0.45
             overrides["breakout"]["min_score_override"] = 0
             overrides["breakout"]["max_recommend"] = 5
             overrides["general"]["note"] = (
@@ -252,6 +253,7 @@ class HealthMonitor:
             overrides["oversold"]["drop_20d_min"] = 20
             overrides["oversold"]["today_gain_min"] = 3
             overrides["breakout"]["volume_ratio_min"] = 1.2
+            overrides["general"]["ai_min_probability"] = 0.35
             overrides["general"]["note"] = (
                 "Level2：振幅放宽到55%，超跌20日跌幅要求降到20%，突破量比降到1.2"
             )
@@ -259,6 +261,7 @@ class HealthMonitor:
         if level >= 3:
             overrides["general"]["use_full_market"] = True
             overrides["breakout"]["max_recommend"] = 8
+            overrides["general"]["ai_min_probability"] = 0.25
             overrides["general"]["note"] = (
                 "Level3：全市场扫描（取消优质股票池限制）+ 突破最多推8只"
             )

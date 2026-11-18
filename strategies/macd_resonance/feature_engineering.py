@@ -86,10 +86,11 @@ def build_features(df: pd.DataFrame, moneyflow_df: pd.DataFrame = None) -> pd.Da
     features = pd.DataFrame(index=data.index)
 
     # ===== 1. 价格特征 =====
+    # ⚠️ 禁止使用 return_5d / return_10d：它们与标签（未来5日涨幅）高度相关，
+    #   会导致训练时 AUC 虚高、预测时反向预测（AUC < 0.5）。
+    #   仅保留 return_1d / return_3d（滞后特征，不含未来信息）。
     features["return_1d"] = close.pct_change(1) * 100
     features["return_3d"] = close.pct_change(3) * 100
-    features["return_5d"] = close.pct_change(5) * 100
-    features["return_10d"] = close.pct_change(10) * 100
     features["volatility_5d"] = close.pct_change().rolling(5).std() * 100
     features["volatility_10d"] = close.pct_change().rolling(10).std() * 100
     features["amplitude_5d"] = ((high.rolling(5).max() - low.rolling(5).min()) / close.rolling(5).mean() * 100)
@@ -204,7 +205,7 @@ def prepare_training_data(stock_code: str, days: int = 250) -> Tuple[pd.DataFram
 def get_feature_names() -> List[str]:
     """获取特征名称列表。"""
     return [
-        "return_1d", "return_3d", "return_5d", "return_10d",
+        "return_1d", "return_3d",
         "volatility_5d", "volatility_10d", "amplitude_5d", "amplitude_20d",
         "ma5_deviation", "ma10_deviation", "ma20_deviation",
         "ma5_slope", "ma10_slope", "ma_bullish",

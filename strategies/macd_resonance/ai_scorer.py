@@ -31,7 +31,26 @@ MODEL_SCORE_BASIS = "model"
 class AIScorer:
     """AI打分融合器。"""
 
-    def __init__(self, min_probability: float = 0.55):
+    # 健康度降级档位对应的 AI 过滤阈值（模型预测概率下限）
+    # 原设计 0.55 在模型持续给出低分时（熊市/弱势）会造成"扫描有结果但全被 AI 过滤"的假阴性；
+    # 降级时逐步放宽，确保在 Level 3（最宽松）时至少能把 top 候选推出去。
+    DEGRADATION_AI_THRESHOLDS = {
+        0: 0.55,  # 正常：55%
+        1: 0.45,  # 轻度：45%
+        2: 0.35,  # 中度：35%
+        3: 0.25,  # 重度：25%（模型再 pessimistic 也能出推荐）
+    }
+
+    def __init__(self, min_probability: float = 0.55, degradation_level: int = 0):
+        """
+        Args:
+            min_probability: 最低推送概率阈值（仅当 degradation_level=0 时生效）
+            degradation_level: 当前健康度降级等级（0-3），等级越高阈值越低
+        """
+        self.degradation_level = degradation_level
+        self.min_probability = self.DEGRADATION_AI_THRESHOLDS.get(
+            min(degradation_level, 3), min_probability
+        )
         """
         Args:
             min_probability: 最低推送概率阈值
@@ -199,6 +218,6 @@ class AIScorer:
         }
 
 
-def init_ai_scorer(min_probability: float = 0.55) -> AIScorer:
+def init_ai_scorer(min_probability: float = 0.55, degradation_level: int = 0) -> AIScorer:
     """初始化AI打分器。"""
-    return AIScorer(min_probability=min_probability)
+    return AIScorer(min_probability=min_probability, degradation_level=degradation_level)

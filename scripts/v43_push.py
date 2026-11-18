@@ -119,7 +119,7 @@ def ai_filter_entries(entries: list, strategy_type: str = "") -> list:
     if not entries:
         return entries
     try:
-        scorer = init_ai_scorer(min_probability=0.55)
+        scorer = init_ai_scorer(min_probability=0.55, degradation_level=degradation_level)
         scored = scorer.score_candidates(entries, strategy_type)
         _last_ai_scorer = scorer
         return scored
@@ -304,6 +304,7 @@ def main():
     # ★ param_override 现在会真正传入三个扫描器（此前只 print，从未作用于扫描）
     health = init_health_monitor()
     param_override = health.get_current_params_override()
+    _degradation_level = health.state.get("degradation_level", 0)
     if param_override["level"] > 0:
         print(f"⚠️ 系统处于降级状态 Level {param_override['level']}："
               f"{param_override['general'].get('note', '')}（已作用于三个扫描器）")
@@ -329,7 +330,7 @@ def main():
     else:
         result = result_box.get("r", {"summary": "扫描无结果"})
     # AI打分过滤：只保留上涨概率>55%的候选
-    result["entries"] = ai_filter_entries(result.get("entries", []), "resonance")
+    result["entries"] = ai_filter_entries(result.get("entries", []), "resonance", degradation_level=_degradation_level)
     msg = build_message(result)
     # 多维详情（仅共振推荐有）
     resonance_entries = result.get("entries", [])
@@ -372,7 +373,7 @@ def main():
             oversold_result = oversold_box.get("r", {"summary": "超跌反弹扫描无结果"})
 
         # AI打分过滤
-        oversold_result["entries"] = ai_filter_entries(oversold_result.get("entries", []), "oversold")
+        oversold_result["entries"] = ai_filter_entries(oversold_result.get("entries", []), "oversold", degradation_level=_degradation_level)
         oversold_msg = build_oversold_message(oversold_result)
         oversold_msg = append_ai_score_block(oversold_msg, oversold_result.get("entries", []))
         oversold_entries = oversold_result.get("entries", [])
@@ -414,7 +415,7 @@ def main():
             breakout_result = breakout_box.get("r", {"summary": "趋势突破扫描无结果"})
 
         # AI打分过滤
-        breakout_result["entries"] = ai_filter_entries(breakout_result.get("entries", []), "breakout")
+        breakout_result["entries"] = ai_filter_entries(breakout_result.get("entries", []), "breakout", degradation_level=_degradation_level)
         breakout_msg = build_breakout_message(breakout_result)
         breakout_msg = append_ai_score_block(breakout_msg, breakout_result.get("entries", []))
         breakout_entries = breakout_result.get("entries", [])
