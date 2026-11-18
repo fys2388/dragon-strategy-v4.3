@@ -42,10 +42,10 @@
     "2026-11-13": 0,
     "2026-11-16": 0,
     "2026-11-17": 0,
-    "2026-11-18": 0
+    "2026-11-18": 6
   },
-  "consecutive_zero_days": 37,
-  "degradation_level": 3,
+  "consecutive_zero_days": 0,
+  "degradation_level": 1,
   "last_recommendation_date": "2026-11-18",
   "degradation_history": [
     {
@@ -103,7 +103,19 @@
       "from_level": 2,
       "to_level": 1,
       "reason": "2026-11-18 出现推荐（距上次推荐0天）"
+    },
+    {
+      "date": "2026-11-18 13:09:26",
+      "from_level": 3,
+      "to_level": 2,
+      "reason": "2026-11-18 出现推荐（距上次推荐0天）"
+    },
+    {
+      "date": "2026-11-18 13:10:44",
+      "from_level": 2,
+      "to_level": 1,
+      "reason": "2026-11-18 出现推荐（距上次推荐0天）"
     }
   ],
-  "updated_at": "2026-11-18 11:31:41"
+  "updated_at": "2026-11-18 13:10:44"
 }
