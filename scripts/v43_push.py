@@ -109,8 +109,13 @@ def _send_text(msg: str) -> bool:
 _last_ai_scorer = None
 
 
-def ai_filter_entries(entries: list, strategy_type: str = "") -> list:
-    """用打分器过滤候选股票，只保留打分 ≥ 55（0~100）的。
+def ai_filter_entries(entries: list, strategy_type: str = "", degradation_level: int = 0) -> list:
+    """用打分器过滤候选股票，只保留打分 ≥ 阈值（随健康度降级而放宽）的。
+
+    Args:
+        entries: 候选股票列表
+        strategy_type: 策略类型 ("resonance"/"oversold"/"breakout")
+        degradation_level: 当前健康度降级等级（0-3），影响 AI 过滤阈值
 
     有训练好的 LightGBM 模型时按模型概率过滤；没有模型时（当前状态）
     按规则打分过滤，不是概率。打分器不可用时自动降级为原始推荐，不中断运行。
