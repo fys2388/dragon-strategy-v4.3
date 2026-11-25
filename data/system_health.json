@@ -46,9 +46,10 @@
     "2026-11-19": 0,
     "2026-11-20": 0,
     "2026-11-23": 2,
-    "2026-11-24": 2
+    "2026-11-24": 2,
+    "2026-11-25": 0
   },
-  "consecutive_zero_days": 0,
+  "consecutive_zero_days": 1,
   "degradation_level": 0,
   "last_recommendation_date": "2026-11-24",
   "degradation_history": [
@@ -139,5 +140,5 @@
       "reason": "2026-11-23 出现推荐（距上次推荐0天）"
     }
   ],
-  "updated_at": "2026-11-24 14:52:41"
+  "updated_at": "2026-11-25 10:02:39"
 }
