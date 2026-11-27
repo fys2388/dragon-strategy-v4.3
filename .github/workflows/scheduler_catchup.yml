@@ -49,6 +49,11 @@ on:
 # 写两行 `actions: read` + `actions: write` 会报 "'actions' is already defined" 直接拒整个文件
 # （本地 PyYAML 解析静默取后者所以测不出来）。补档只需 actions:write，
 # 它已包含对 /dispatches 端点的 POST 权限；contents:read 供 checkout。
+#
+# 2026-11-27：移除 contents:write（回传审计日志的 git push 被分支保护 403 拒——
+#   内置 token 对 default branch 无写权限，写审计日志无法 push 回仓库）。
+#   审计日志 data/scheduler_remediation.jsonl 仅在 runner 本地生成，不回传；
+#   补档功能本身不依赖它，主推送走 strategy_cloud_deploy.yml 的另一条链。
 permissions:
   contents: read
   actions: write
@@ -90,18 +95,15 @@ jobs:
           fi
           python scripts/scheduler_health_check.py --catchup $ARGS
 
-      - name: 回传补档审计日志
+      - name: 补档审计日志（本地记录，不回传仓库）
         if: always()
         run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          # 内置 token 对 default branch 无写权限（分支保护 403），
+          # 回传审计日志到仓库不可行。审计仅留在 runner 本地日志中，
+          # 补档功能本身不依赖持久化的 jsonl，主推送走 strategy_cloud_deploy.yml。
           if [ -f data/scheduler_remediation.jsonl ]; then
-            git add data/scheduler_remediation.jsonl
-          fi
-          if git diff --cached --quiet; then
-            echo "补档审计日志无变化"
+            echo "===== 补档审计日志（本地记录，不回传） ====="
+            cat data/scheduler_remediation.jsonl
           else
-            git commit -m "调度器补档审计日志（自动）"
-            git push
-            echo "补档审计日志已回传"
+            echo "无补档审计记录（本次未发生补发/失败/跳过操作）"
           fi
